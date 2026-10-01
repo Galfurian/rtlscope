@@ -1,0 +1,55 @@
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    name: unittest (python ${{ matrix.python }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the test suite
+        run: python3 -m unittest discover -s tests -v
+
+  no-dependencies:
+    name: standard library only
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Refuse any import outside the standard library
+        run: |
+          python3 - <<'PY'
+          import ast, pathlib, sys
+          names = set()
+          tree = ast.parse(pathlib.Path("rtlscope.py").read_text())
+          for node in ast.walk(tree):
+              if isinstance(node, ast.Import):
+                  names.update(alias.name.split(".")[0] for alias in node.names)
+              elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+                  names.add(node.module.split(".")[0])
+          extra = sorted(names - set(sys.stdlib_module_names))
+          print("imports:", " ".join(sorted(names)))
+          if extra:
+              sys.exit(f"non-standard-library imports: {extra}")
+          PY
+      - name: Run as a single command with an empty environment
+        run: |
+          cd "$(mktemp -d)"
+          cp "$GITHUB_WORKSPACE/rtlscope.py" .
+          env -i "$(command -v python3)" rtlscope.py --version
