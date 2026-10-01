@@ -37,8 +37,13 @@ python3 rtlscope.py design.tree.json                     # top module, as a bloc
 python3 rtlscope.py design.tree.json --module NAME       # another module
 python3 rtlscope.py design.tree.json --width 120         # at most 120 columns wide
 python3 rtlscope.py design.tree.json --height 40         # ... and at most 40 rows tall
+python3 rtlscope.py design.tree.json --optimize crossings # fewer crossings, longer wires
 python3 rtlscope.py design.tree.json --format text       # whole hierarchy, as text
 ```
+
+`--optimize` steers the routing towards `length` (short wires), `bends`
+(straight wires) or `crossings` (few crossings). Name several, separated by
+commas, to mix them: `--optimize crossings,bends`.
 
 The diagram defaults to the terminal width. A module that cannot be drawn
 within `--width`, or within `--height` when given, is an error that says how

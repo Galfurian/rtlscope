@@ -210,8 +210,8 @@ inputs, so data flows left to right. Cycles are cut where a forward walk from
 the inputs first closes them, so a feedback wire is the one that runs back.
 Within a column, instances are ordered by the barycenter of the instances
 that drive them, which removes most needless crossings. Boxes are stacked and
-centered in their column. Each label is put on the row of its first pin, so
-most edge wires are straight.
+centered in their column, with a free row above and below the whole
+placement so that wires can pass over the boxes.
 
 Columns are separated by routing channels. A channel gets one track for each
 net that crosses it, plus room for the stub and access cell of the pins on
@@ -239,6 +239,29 @@ When a net fails, everything is torn up and that net goes first (rip-up and
 reroute), until an order succeeds or every order tried has failed. If none
 works, the whole diagram is placed again with wider channels and more space
 between boxes, up to a fixed number of attempts.
+
+Labels have no row until they are routed. Like an unconstrained I/O pin in a
+physical design flow, a label is routed from every free row of its edge at
+once, and it goes where the cheapest wire reaches the edge. Nothing decides
+by hand when a wire may run straight to an edge: a straight wire wins when one
+exists because it has no bends and no crossings. Among equally cheap rows, the
+one nearest the net's first pin wins, so the result is deterministic. Ports
+are therefore ordered along an edge by what suits the wiring, not by
+declaration order.
+
+**Optimize.** The costs are the objective: by default 1 per wire cell, 2 per
+bend and 3 per crossing, so a crossing is worth three cells of detour.
+`--optimize` names goals among `length`, `bends` and `crossings`; each named
+goal multiplies its cost by 5, and naming several mixes them, the way a
+synthesis run trades area against delay.
+
+Costs alone do not make the drawing optimal, because nets are routed one at
+a time and each one only sees those already routed. In the counter example,
+`count` is routed before `next` exists; whatever its cost, the crossing is
+paid later by `next`. So the routing is repeated for a few net orders
+(declaration order, reversed, by fan-out, by span both ways), each finished
+drawing is scored with the same costs over all its wire cells, bends and
+crossings, and the lowest score wins, the first order on ties.
 
 **Check.** Empty margins are trimmed. A diagram wider than `width`, or taller
 than `height` when given, is an error naming the size it needs.

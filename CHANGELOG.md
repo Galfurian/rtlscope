@@ -24,6 +24,12 @@ in the terminal. There is no interactive UI yet.
   output. Instances are placed in columns that follow the data flow, and
   every net is routed by a maze router on the character grid. Crossings are
   `┼`, branches are `┬ ┴ ├ ┤`, and the two never look alike.
+- Edge labels are placed like unconstrained I/O pins: each goes to the row of
+  its edge that the cheapest wire reaches, rather than to a row chosen in
+  advance.
+- `--optimize` favours short wires (`length`), straight ones (`bends`) or few
+  crossings (`crossings`), or a mix of them. The routing is tried in several
+  net orders and the drawing that scores best for the chosen goals is kept.
 - `--width` and `--height` bound the diagram; one that does not fit is an
   error saying how much room it needs. The width defaults to the terminal.
 - `--format text`: a deterministic dump of the whole hierarchy or of one

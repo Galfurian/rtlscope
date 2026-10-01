@@ -359,9 +359,13 @@ _GLYPHS = {
     N | E | S: "├", N | S | W: "┤", E | S | W: "┬", N | E | W: "┴",
 }
 CROSSING = "┼"
-_BEND_COST = 2
-_CROSSING_COST = 3
 _ATTEMPTS = 6
+
+# What --optimize can favour. Each goal is one term of the cost the router
+# minimizes, and naming it multiplies that term by _EMPHASIS; naming several
+# mixes them.
+GOALS = ("length", "bends", "crossings")
+_EMPHASIS = 5
 
 Cell = Tuple[int, int]
 Stub = Tuple[int, int, int]  # x, y, and the direction from the stub to what it serves
@@ -369,6 +373,23 @@ Stub = Tuple[int, int, int]  # x, y, and the direction from the stub to what it 
 
 class DiagramError(RTLScopeError):
     """The diagram does not fit the requested size."""
+
+
+@dataclass(frozen=True)
+class Costs:
+    """The routing objective: what a wire cell, a bend and a crossing cost."""
+
+    length: int = 1
+    bends: int = 2
+    crossings: int = 3
+
+    @classmethod
+    def favouring(cls, goals: Sequence[str]) -> "Costs":
+        unknown = [g for g in goals if g not in GOALS]
+        if unknown:
+            raise RTLScopeError(f"unknown optimization goal {unknown[0]!r}; choose from {', '.join(GOALS)}")
+        base = cls()
+        return cls(*(getattr(base, g) * (_EMPHASIS if g in goals else 1) for g in GOALS))
 
 
 @dataclass
@@ -431,25 +452,32 @@ class _Box:
 
 @dataclass
 class _Label:
-    """A net name at the left or right edge of the diagram."""
+    """A net name at the left or right edge of the diagram.
+
+    Its row is not chosen in advance. Like an unconstrained I/O pin, it goes
+    wherever the cheapest wire reaches that edge.
+    """
 
     text: str
     left: bool
     pad: int  # spaces between the text and the wire
-    x: int = 0
+    edge: int = 0  # x of the stub, the label's cell nearest the diagram
+    prefer: int = 0  # the row favoured among equally cheap ones
     y: int = 0
 
     @property
     def width(self) -> int:
         return len(self.text) + self.pad + 1
 
-    def stub(self) -> Stub:
-        if self.left:
-            return self.x + self.width - 1, self.y, W
-        return self.x, self.y, E
+    def wire(self) -> range:
+        """Cells between the text and the stub, filled with wire."""
+        return range(len(self.text) + self.pad, self.edge) if self.left else range(0)
 
-    def draw(self, text: Dict[Cell, str]) -> None:
-        _put(text, self.x if self.left else self.x + 1 + self.pad, self.y, self.text)
+    def text_x(self) -> int:
+        return 0 if self.left else self.edge + 1 + self.pad
+
+    def stub(self, y: int) -> Stub:
+        return self.edge, y, W if self.left else E
 
 
 _End = Union[Tuple[_Box, Port], _Label]
@@ -466,8 +494,8 @@ def _put(text: Dict[Cell, str], x: int, y: int, string: str) -> None:
         text[(x + i, y)] = char
 
 
-def _stub(end: _End) -> Stub:
-    return end.stub() if isinstance(end, _Label) else end[0].stub(end[1])
+def _pin_stub(end: Tuple[_Box, Port]) -> Stub:
+    return end[0].stub(end[1])
 
 
 def _columns(design: Design, module: Module) -> List[List[Instance]]:
@@ -622,8 +650,8 @@ def _slot_of(end: _End, last: int) -> int:
     return end[0].slot
 
 
-def _place(columns, lefts, rights, nets, extra: int, vgap: int, max_width: int) -> Tuple[int, int]:
-    """Assign coordinates; return the grid size."""
+def _place(columns, lefts, rights, nets, extra: int, vgap: int, max_width: int) -> Tuple[int, int, int, int]:
+    """Assign coordinates; return the grid size and the routable columns."""
     last = len(columns) + 1
     widths = [max((l.width for l in lefts), default=0)]
     widths += [max(b.width for b in column) for column in columns]
@@ -646,40 +674,41 @@ def _place(columns, lefts, rights, nets, extra: int, vgap: int, max_width: int) 
         xs.append(xs[-1] + width + gap)
     heights = [sum(b.height for b in column) + vgap * (len(column) - 1) for column in columns]
     body = max([*heights, len(lefts), len(rights), 1])
-    height = body + 2 * vgap
+    # One free row beyond the keep-out ring, so wires can pass over the boxes.
+    margin = vgap + 1
+    height = body + 2 * margin
     for column, column_height in zip(columns, heights):
-        y = vgap + (body - column_height) // 2
+        y = margin + (body - column_height) // 2
         for box in column:
             box.x = xs[box.slot] + (widths[box.slot] - box.width) // 2
             box.y = y
             y += box.height + vgap
 
-    for labels, x in ((lefts, 0), (rights, xs[last])):
-        wanted = []
+    for labels, edge in ((lefts, widths[0] - 1), (rights, xs[last])):
         for label in labels:
             net = next(n for n in nets if label in n.ends)
-            rows = [_stub(end)[1] for end in net.ends if not isinstance(end, _Label)]
-            wanted.append((rows[0] if rows else vgap, label))
-        taken = set()
-        for row, label in sorted(wanted, key=lambda item: item[0]):
-            for delta in sorted(range(-height, height), key=lambda d: (abs(d), d < 0)):
-                if 0 <= row + delta < height and row + delta not in taken:
-                    label.x, label.y = x, row + delta
-                    taken.add(label.y)
-                    break
-    return xs[last] + widths[-1], height
+            rows = [_pin_stub(end)[1] for end in net.ends if not isinstance(end, _Label)]
+            label.edge = edge
+            label.prefer = rows[0] if rows else margin
+    return xs[last] + widths[-1], height, widths[0], xs[last] - 1
 
 
 class _Router:
-    def __init__(self, width: int, height: int, text: Dict[Cell, str]) -> None:
+    def __init__(self, width: int, height: int, text: Dict[Cell, str], xmin: int, xmax: int,
+                 costs: Costs = Costs()) -> None:
         self.width = width
+        self.costs = costs
         self.height = height
         self.text = text
+        # Wires stay between the label columns; labels are reached through their stubs.
+        self.xmin = xmin
+        self.xmax = xmax
         self.wires: Dict[Cell, Dict[str, int]] = {}
         # Pin and label stubs are never crossed: "┼┤" would read as a connection.
         self.stubs: set = set()
         # A ring of free cells around every box, so no wire runs along a border.
         self.keepout: set = set()
+        self.label_rows: Dict[bool, set] = {True: set(), False: set()}
 
     def _add(self, cell: Cell, net: str, bits: int) -> None:
         masks = self.wires.setdefault(cell, {})
@@ -709,31 +738,84 @@ class _Router:
         self._add(access, net, bit)
         return access[0], access[1], bit
 
-    def route(self, net: str, stubs: List[Stub]) -> bool:
-        """Connect the stubs as one tree, nearest first, onto what is routed."""
-        if len(stubs) < 2:
-            return True
-        first = stubs[0]
-        rest = sorted(stubs[1:], key=lambda s: abs(s[0] - first[0]) + abs(s[1] - first[1]))
-        tree = {first[:2]}
-        pending = {s[:2] for s in rest}
-        for x, y, bit in rest:
-            pending.discard((x, y))
-            path = self._search(net, (x, y), bit, tree, pending)
-            if path is None:
+    def route(self, net: str, stubs: List[Stub], labels: List[_Label]) -> bool:
+        """Connect the pins as one tree, nearest first, then bring in the labels."""
+        tree: set = set()
+        if stubs:
+            first = stubs[0]
+            tree.add(first[:2])
+            rest = sorted(stubs[1:], key=lambda s: abs(s[0] - first[0]) + abs(s[1] - first[1]))
+            pending = {s[:2] for s in rest}
+            for x, y, bit in rest:
+                pending.discard((x, y))
+                path = self._search(net, {(x, y): bit}, tree, pending)
+                if path is None:
+                    return False
+                self._commit(net, path, tree)
+        for label in labels:
+            if not self._route_label(net, label, tree):
                 return False
-            for (cell, step), nxt in zip(path, path[1:]):
-                self._add(cell, net, step)
-                self._add(nxt[0], net, _OPPOSITE[step])
-            tree.update(cell for cell, _ in path)
         return True
 
-    def _search(self, net: str, start: Cell, stub_bit: int, tree: set, pending: set):
-        """Dijkstra over (cell, heading); returns [(cell, step to next)], ending in the tree."""
-        counter = 0
-        frontier = [(0, counter, start, 0)]
-        best: Dict[Tuple[Cell, int], int] = {(start, 0): 0}
-        parent: Dict[Tuple[Cell, int], Optional[Tuple[Cell, int]]] = {(start, 0): None}
+    def _commit(self, net: str, path, tree: set) -> None:
+        for (cell, step), nxt in zip(path, path[1:]):
+            self._add(cell, net, step)
+            self._add(nxt[0], net, _OPPOSITE[step])
+        tree.update(cell for cell, _ in path)
+
+    def _label_cells(self, label: _Label, row: int) -> List[Cell]:
+        x, y, bit = label.stub(row)
+        dx, _ = _STEP[_OPPOSITE[bit]]
+        text = [(label.text_x() + i, row) for i in range(len(label.text))]
+        return text + [(x, row) for x in label.wire()] + [(x, y), (x + dx, y)]
+
+    def _route_label(self, net: str, label: _Label, tree: set) -> bool:
+        """Route to whichever free row of the label's edge is cheapest, and put it there."""
+        rows = [
+            row
+            for row in range(self.height)
+            if row not in self.label_rows[label.left]
+            and not any(c in self.text or c in self.wires for c in self._label_cells(label, row))
+        ]
+        rows.sort(key=lambda row: (abs(row - label.prefer), row))
+        if not rows:
+            return False
+        if not tree:
+            # Nothing inside the module is on this net: the label stands alone.
+            tree.add(self._claim_label(net, label, rows[0]))
+            return True
+        starts = {}
+        for row in rows:
+            x, y, bit = label.stub(row)
+            dx, _ = _STEP[_OPPOSITE[bit]]
+            starts[(x + dx, y)] = bit
+        path = self._search(net, starts, tree, set())
+        if path is None:
+            return False
+        self._claim_label(net, label, path[0][0][1])
+        self._commit(net, path, tree)
+        return True
+
+    def _claim_label(self, net: str, label: _Label, row: int) -> Cell:
+        label.y = row
+        self.label_rows[label.left].add(row)
+        _put(self.text, label.text_x(), row, label.text)
+        for x in label.wire():
+            self._add((x, row), net, E | W)
+            self.stubs.add((x, row))
+        x, y, _ = self.claim(net, label.stub(row))
+        return x, y
+
+    def _search(self, net: str, starts: Dict[Cell, int], tree: set, pending: set):
+        """Dijkstra over (cell, heading) from any start; returns [(cell, step to next)].
+
+        ``starts`` maps each start cell to the direction of its stub, which the
+        path may not leave through. The path ends on a cell of ``tree``.
+        """
+        frontier = [(0, counter, start, 0) for counter, start in enumerate(starts)]
+        counter = len(frontier)
+        best: Dict[Tuple[Cell, int], int] = {(start, 0): 0 for start in starts}
+        parent: Dict[Tuple[Cell, int], Optional[Tuple[Cell, int]]] = {(start, 0): None for start in starts}
         done = set()
         while frontier:
             cost, _, cell, heading = heapq.heappop(frontier)
@@ -743,24 +825,24 @@ class _Router:
             done.add(state)
             if cell in tree:
                 return self._path(parent, state)
-            crossing = cell != start and bool(self.wires.get(cell))
+            crossing = heading != 0 and bool(self.wires.get(cell))
             for step in (E, S, W, N):
                 if heading and step == _OPPOSITE[heading]:
                     continue
-                if cell == start and step == stub_bit:
+                if heading == 0 and step == starts[cell]:
                     continue
                 if crossing and step != heading:
                     continue
                 dx, dy = _STEP[step]
                 nxt = (cell[0] + dx, cell[1] + dy)
-                if not (0 <= nxt[0] < self.width and 0 <= nxt[1] < self.height):
+                if not (self.xmin <= nxt[0] <= self.xmax and 0 <= nxt[1] < self.height):
                     continue
                 if nxt in self.text or nxt in pending:
                     continue
                 if nxt in self.keepout and nxt not in self.stubs:
                     continue
                 masks = self.wires.get(nxt, {})
-                step_cost = 1 + (_BEND_COST if heading and step != heading else 0)
+                step_cost = self.costs.length + (self.costs.bends if heading and step != heading else 0)
                 if nxt in tree:
                     back = _OPPOSITE[step]
                     mask = masks[net]
@@ -773,7 +855,7 @@ class _Router:
                     other = next(iter(masks.values())) if len(masks) == 1 else None
                     if other != (N | S if step in (E, W) else E | W):
                         continue
-                    step_cost += _CROSSING_COST
+                    step_cost += self.costs.crossings
                 key = (nxt, step)
                 if key in done or best.get(key, cost + step_cost + 1) <= cost + step_cost:
                     continue
@@ -792,6 +874,16 @@ class _Router:
         states.reverse()
         # Pair each cell with the step leaving it towards the next one.
         return [(cell, states[i + 1][1] if i + 1 < len(states) else 0) for i, (cell, _) in enumerate(states)]
+
+    def score(self) -> int:
+        """The objective over the finished drawing, which is what orders compete on."""
+        length = bends = crossings = 0
+        for masks in self.wires.values():
+            crossings += len(masks) > 1
+            for mask in masks.values():
+                length += 1
+                bends += mask in (E | S, S | W, N | E, N | W)
+        return length * self.costs.length + bends * self.costs.bends + crossings * self.costs.crossings
 
     def render(self) -> List[str]:
         lines = []
@@ -814,21 +906,55 @@ class _Router:
         return [l[indent:] for l in lines]
 
 
-def _route(columns, nets: List[_Net], width: int, height: int, text: Dict[Cell, str]) -> Optional[_Router]:
-    """Route every net, or None when no order tried connects them all.
+def _orders(nets: List[_Net]) -> List[List[_Net]]:
+    """Net orders worth trying: routing is sequential, so order shapes the result."""
+
+    def span(net: _Net) -> int:
+        stubs = [_pin_stub(e) for e in net.ends if not isinstance(e, _Label)]
+        if not stubs:
+            return 0
+        xs, ys = [s[0] for s in stubs], [s[1] for s in stubs]
+        return max(xs) - min(xs) + max(ys) - min(ys)
+
+    orders = [
+        list(nets),
+        list(reversed(nets)),
+        sorted(nets, key=lambda n: -len(n.ends)),
+        sorted(nets, key=span),
+        sorted(nets, key=lambda n: -span(n)),
+    ]
+    unique = []
+    for order in orders:
+        if order not in unique:
+            unique.append(order)
+    return unique
+
+
+def _route_in_order(columns, order: List[_Net], size, text: Dict[Cell, str], costs: Costs) -> Optional[_Router]:
+    """Route every net starting from one order, or None when none tried works.
 
     Rip-up and reroute: when a net cannot be routed, the nets routed before it
     are what boxed it in, so everything is torn up and it goes first.
     """
-    order = list(nets)
+    order = list(order)
     tried = set()
     while tuple(n.name for n in order) not in tried:
         tried.add(tuple(n.name for n in order))
-        router = _Router(width, height, text)
+        router = _Router(size[0], size[1], dict(text), size[2], size[3], costs)
         for box in (b for column in columns for b in column):
             router.keep_clear(box)
-        starts = {net.name: [router.claim(net.name, _stub(end)) for end in net.ends] for net in order}
-        failed = next((n for n in order if not router.route(n.name, starts[n.name])), None)
+        starts = {
+            net.name: [router.claim(net.name, _pin_stub(e)) for e in net.ends if not isinstance(e, _Label)]
+            for net in order
+        }
+        failed = next(
+            (
+                n
+                for n in order
+                if not router.route(n.name, starts[n.name], [e for e in n.ends if isinstance(e, _Label)])
+            ),
+            None,
+        )
         if failed is None:
             return router
         order.remove(failed)
@@ -836,29 +962,39 @@ def _route(columns, nets: List[_Net], width: int, height: int, text: Dict[Cell, 
     return None
 
 
-def render_diagram(design: Design, module: Module, width: int, height: Optional[int] = None) -> str:
+def _route(columns, nets: List[_Net], size, text: Dict[Cell, str], costs: Costs) -> Optional[_Router]:
+    """The best-scoring routing over several net orders; the first wins ties."""
+    best: Optional[_Router] = None
+    for order in _orders(nets):
+        router = _route_in_order(columns, order, size, text, costs)
+        if router is not None and (best is None or router.score() < best.score()):
+            best = router
+    return best
+
+
+def render_diagram(
+    design: Design, module: Module, width: int, height: Optional[int] = None, costs: Costs = Costs()
+) -> str:
     """One module as a box-and-wire block diagram at most ``width`` columns wide.
 
-    Raises DiagramError when the module does not fit, or does not fit in
-    ``height`` rows when that is given as well.
+    ``costs`` is the objective the routing minimizes. Raises DiagramError when
+    the module does not fit, or does not fit in ``height`` rows when given.
     """
     if not module.instances:
         box = _Box(module.name, "", [p for p in module.ports.values() if p.direction is Direction.INPUT],
                    [p for p in module.ports.values() if p.direction is not Direction.INPUT], slot=0)
         text: Dict[Cell, str] = {}
         box.draw(text)
-        lines = _Router(box.width, box.height, text).render()
+        lines = _Router(box.width, box.height, text, 0, box.width - 1).render()
         return _check_size(lines, module, width, height)
 
     for attempt in range(_ATTEMPTS):
         columns, lefts, rights, nets = _plan(design, module)
-        grid_width, grid_height = _place(columns, lefts, rights, nets, attempt, 1 + 2 * attempt, width)
+        size = _place(columns, lefts, rights, nets, attempt, 1 + 2 * attempt, width)
         text = {}
         for box in (b for column in columns for b in column):
             box.draw(text)
-        for label in lefts + rights:
-            label.draw(text)
-        router = _route(columns, nets, grid_width, grid_height, text)
+        router = _route(columns, nets, size, text, costs)
         if router is not None:
             return _check_size(router.render(), module, width, height)
     raise DiagramError(f"cannot route module {module.name} within a width of {width}")
@@ -909,6 +1045,13 @@ def build_parser() -> argparse.ArgumentParser:
         metavar="ROWS",
         help="maximum diagram height; a diagram that needs more is an error",
     )
+    parser.add_argument(
+        "--optimize",
+        metavar="GOALS",
+        type=lambda text: [g for g in text.split(",") if g],
+        default=[],
+        help=f"favour some of {', '.join(GOALS)}; separate several with commas to mix them",
+    )
     return parser
 
 
@@ -929,7 +1072,8 @@ def run(args: argparse.Namespace) -> int:
         return 0
     module = design.module(args.module) if args.module is not None else design.top
     width = args.width if args.width is not None else shutil.get_terminal_size().columns
-    print(render_diagram(design, module, width, args.height), end="")
+    costs = Costs.favouring(args.optimize)
+    print(render_diagram(design, module, width, args.height, costs), end="")
     return 0
 
 

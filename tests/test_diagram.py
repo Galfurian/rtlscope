@@ -132,6 +132,23 @@ class PlacementTests(DiagramAssertions):
         text = rtlscope.render_diagram(d, d.top, 100)
         self.assertDrawnAsModeled(d, d.top, text)
 
+    def test_output_label_avoids_a_blocked_row(self):
+        # u1.o drives the output and u2, and u2 sits on u1.o's row. The label
+        # must not stay on that row and wrap around u2 to reach the edge.
+        d = design(
+            [("x", IN), ("out", OUT)],
+            ["n"],
+            [BUF],
+            [("u1", "buf", {"i": "x", "o": "out"}), ("u2", "buf", {"i": "out", "o": "n"})],
+        )
+        text = rtlscope.render_diagram(d, d.top, 80)
+        drawing = Diagram(text)
+        u2 = drawing.box("u2")
+        u2_rows = {y for _, y in u2["cells"]}
+        label_row = next(y for y, row in enumerate(text.splitlines()) if "▶ out" in row)
+        self.assertNotIn(label_row, u2_rows, text)
+        self.assertDrawnAsModeled(d, d.top, text)
+
     def test_feedback_loop(self):
         d = design(
             [("a", IN), ("q", OUT)],
@@ -238,3 +255,42 @@ class SizeConstraintTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class OptimizationGoalTests(DiagramAssertions):
+    WIRE = set("─│┌┐└┘├┤┬┴┼")
+
+    @classmethod
+    def setUpClass(cls):
+        from verilator_snippets import FIXTURES
+
+        cls.counter = rtlscope.load_verilator_json(FIXTURES.parent.parent / "examples" / "Vcounter.tree.json")
+
+    def draw(self, *goals):
+        return rtlscope.render_diagram(self.counter, self.counter.top, 100, costs=rtlscope.Costs.favouring(goals))
+
+    def wire_cells(self, text):
+        # Box borders use the same glyphs; count only cells outside boxes.
+        drawing = Diagram(text)
+        return sum(
+            1
+            for y, row in enumerate(drawing.rows)
+            for x, char in enumerate(row)
+            if char in self.WIRE and (x, y) not in drawing.box_cells
+        )
+
+    def test_costs(self):
+        self.assertEqual(rtlscope.Costs.favouring([]), rtlscope.Costs(1, 2, 3))
+        self.assertEqual(rtlscope.Costs.favouring(["crossings"]), rtlscope.Costs(1, 2, 15))
+        self.assertEqual(rtlscope.Costs.favouring(["crossings", "bends"]), rtlscope.Costs(1, 10, 15))
+        with self.assertRaisesRegex(rtlscope.RTLScopeError, "unknown optimization goal 'area'"):
+            rtlscope.Costs.favouring(["area"])
+
+    def test_goals_trade_crossings_for_length(self):
+        short = self.draw("length")
+        clean = self.draw("crossings")
+        self.assertEqual(short.count("┼"), 1)
+        self.assertEqual(clean.count("┼"), 0)
+        self.assertLess(self.wire_cells(short), self.wire_cells(clean))
+        for text in (short, clean, self.draw("crossings", "bends")):
+            self.assertDrawnAsModeled(self.counter, self.counter.top, text)

@@ -57,6 +57,14 @@ class CLITests(unittest.TestCase):
                 self.assertTrue(err.startswith("rtlscope: error: diagram"), err)
                 self.assertIn(message, err)
 
+    def test_optimize(self):
+        code, out, err = run_main(COMBINATIONAL, "--width", "80", "--optimize", "crossings,bends")
+        self.assertEqual((code, err), (0, ""))
+        self.assertIn("u_proc", out)
+        code, out, err = run_main(COMBINATIONAL, "--optimize", "area")
+        self.assertEqual((code, out), (2, ""))
+        self.assertIn("unknown optimization goal 'area'; choose from length, bends, crossings", err)
+
     def test_size_must_be_positive(self):
         for value in ("0", "-3", "wide"):
             with self.subTest(value=value):
