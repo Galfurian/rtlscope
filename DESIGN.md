@@ -61,6 +61,7 @@ Module
   ports: name -> Port              declaration order
   nets: name -> Net                module-level signals that are not ports
   instances: name -> Instance      source order
+  processes: [Process]             source order
 
 Port
   name
@@ -81,6 +82,13 @@ Instance
   connections: port name -> Expr   a missing port is unconnected
 
 Expr = NetRef(net) | Unsupported(kind, line)
+
+Process                            seen from outside only
+  kind                             always_ff | always_comb | always_latch |
+                                   always | assign | initial | final
+  line
+  reads, writes, clocks            module signals, in declaration order
+  name                             "always_ff, line 19"
 ```
 
 `NetRef.net` names a port or a net of the instance's parent module. A `Net`
@@ -159,18 +167,25 @@ to a module declared after its parent.
    - A `VARREF` there has `varp` pointing at a `VAR` of the parent module,
      which becomes a `NetRef` to that signal. Again the pointer decides, not
      `VARREF.name`.
-3. **Clocks.** A port is a clock when an `ALWAYS` is sensitive to one of its
-   edges (`SENITEM` with `edgeType` `POS`, `NEG` or `BOTH`) and the process
-   body never reads it. That is how synthesis tells the clock from an
-   asynchronous reset: in `always_ff @(posedge clk or negedge rst_n)` both
-   are edges, but the body tests `rst_n` and never `clk`. Names play no part,
-   so `clk_en` is not a clock and `aclk` is. A port wired to a child's clock
-   is a clock as well, so the marking propagates up the hierarchy.
+3. **Processes.** Each `ALWAYS` (with its `keyword`: `always_ff`,
+   `always_comb`, `always_latch`, `always`, or `cont_assign` for an
+   `assign`), `INITIAL` and `FINAL` directly in `stmtsp` becomes a `Process`.
+   Its signals are the `VARREF`s inside it that point at a module-level port
+   or net: `access` `RD` is a read, `WR` a write, `RW` both. References to
+   variables declared inside the process, like a loop index, are left out.
 
-Only module structure is read. Processes are looked at for one thing, which
-variables their sensitivity lists and bodies refer to, to find clocks.
-Otherwise `ALWAYS`, `INITIAL`, assignments and the expressions inside them are
-skipped without interpretation; their contents never turn into connectivity.
+   A clock is an edge in the sensitivity list (`SENITEM` with `edgeType`
+   `POS`, `NEG` or `BOTH`) that the body never reads. That is how synthesis
+   tells a clock from an asynchronous reset: in
+   `always_ff @(posedge clk or negedge rst_n)` both are edges, but the body
+   tests `rst_n` and never `clk`. Names play no part, so `clk_en` is not a
+   clock and `aclk` is. A port that clocks a process, or is wired to a
+   child's clock port, is marked as a clock, so the marking propagates up the
+   hierarchy.
+
+A process is never looked inside beyond which signals it refers to. Its
+statements and expressions are not interpreted, so a process is one box, not
+the gates it would synthesize to.
 
 ### Pin expressions
 
@@ -226,7 +241,14 @@ the modules it instantiates. It is a debugging and test aid, not the final UI.
 `render_diagram` draws one module on a character grid. It works like a very
 small physical design flow, in four steps: plan, place, route, check.
 
-**Plan.** Every instance becomes a box titled `u4 : bit_reverse`, the same
+**Plan.** Every process becomes a box titled by its kind and line,
+`always_ff, line 19`, whose input pins are the signals it reads (clocks
+first) and whose output pins are those it writes, each pin named after its
+signal. A flat module with no instances is therefore still a circuit:
+registers, combinational blocks and the wires between them. Only a module
+with neither instances nor processes is drawn as a single box.
+
+Every instance becomes a box titled `u4 : bit_reverse`, the same
 convention as the text dump, with its parameter values on a second line,
 `#(WIDTH=4)`. Parameters are shown for every specialization, defaults
 included, so two instances of one module visibly differ only in them.
@@ -322,7 +344,9 @@ feedback, inouts, a 16-instance pipeline) and on randomly wired ones.
 
 ## Non-goals for the first milestone
 
-- No behavioral AST viewer: process bodies and expressions are not shown.
+- No behavioral AST viewer: a process is one box, drawn by the signals it
+  reads and writes; its statements and expressions are not shown, and it is
+  not broken down into gates.
 - No simulation.
 - No waveform viewer; that is `vcdtui`'s job.
 - No synthesis or logic optimization.

@@ -11,19 +11,19 @@ from verilator_snippets import COMBINATIONAL
 IN, OUT, IO = Direction.INPUT, Direction.OUTPUT, Direction.INOUT
 
 COMBINATIONAL_DIAGRAM = """\
-              ┌─────────────────────────┐
-              │ u_proc : mux_procedural │
-sel ───────┬──┤sel                     y├──────── y_proc
-a ───────┬─┼──┤a                        │
-b ─────┬─┼─┼──┤b                        │
-       │ │ │  └─────────────────────────┘
-       │ │ │
-       │ │ │  ┌─────────────────────────┐
-       │ │ │  │ u_cont : mux_continuous │
-       │ │ └──┤sel                     y├──────── y_cont
-       │ └────┤a                        │
-       └──────┤b                        │
-              └─────────────────────────┘
+                             ┌─────────────────────────┐
+                             │ u_proc : mux_procedural │
+                     ┌────┬──┤sel                     y├──────── y_proc
+┌──────────────────┐ │ ┌──┼──┤a                        │
+│ initial, line 40 │ │ │  │┌─┤b                        │
+│               sel├─┘ │  ││ └─────────────────────────┘
+│                 a├───┤  ││
+│                 b├─┬─┼──┼┘ ┌─────────────────────────┐
+└──────────────────┘ │ │  │  │ u_cont : mux_continuous │
+                     │ │  └──┤sel                     y├──────── y_cont
+                     │ └─────┤a                        │
+                     └───────┤b                        │
+                             └─────────────────────────┘
 """
 
 
@@ -61,6 +61,11 @@ class DiagramAssertions(unittest.TestCase):
                 for inst in module.instances.values()
                 for port, expr in inst.connections.items()
                 if expr == NetRef(net)
+            ) | frozenset(
+                # A process box's pins are named after the signals they carry.
+                ("pin", process.name, net)
+                for process in module.processes
+                if net in (*process.clocks, *process.reads, *process.writes)
             )
             if pins:
                 expected[pins] = net
@@ -83,10 +88,11 @@ class CombinationalDiagramTests(DiagramAssertions):
     def test_connectivity(self):
         self.assertDrawnAsModeled(self.design, self.design.top, self.text)
 
-    def test_undriven_nets_are_labels(self):
+    def test_initial_block_drives_the_stimulus(self):
         nets = {frozenset(ends) for ends in Diagram(self.text).nets()}
+        initial = "initial, line 40"
         self.assertIn(
-            frozenset({("pin", "u_proc", "sel"), ("pin", "u_cont", "sel"), ("label", "sel")}),
+            frozenset({("pin", initial, "sel"), ("pin", "u_proc", "sel"), ("pin", "u_cont", "sel")}),
             nets,
         )
         self.assertIn(frozenset({("pin", "u_proc", "y"), ("label", "y_proc")}), nets)
@@ -178,20 +184,18 @@ class PlacementTests(DiagramAssertions):
         self.assertRegex(text, r"y│")
         self.assertDrawnAsModeled(d, d.top, text)
 
-    def test_leaf_module_is_one_box(self):
+    def test_module_without_structure_is_one_box(self):
+        d = design([], [], [BUF], [])
+        text = rtlscope.render_diagram(d, d.modules["buf"], 80)
+        self.assertEqual(text.splitlines(), ["┌─────┐", "│ buf │", "│i   o│", "└─────┘"])
+
+    def test_flat_module_shows_its_process(self):
         design_ = rtlscope.load_verilator_json(COMBINATIONAL)
-        text = rtlscope.render_diagram(design_, design_.modules["mux_procedural"], 80)
-        self.assertEqual(
-            text.splitlines(),
-            [
-                "┌────────────────┐",
-                "│ mux_procedural │",
-                "│sel            y│",
-                "│a               │",
-                "│b               │",
-                "└────────────────┘",
-            ],
-        )
+        module = design_.modules["mux_procedural"]
+        text = rtlscope.render_diagram(design_, module, 80)
+        self.assertIn("│ always_comb, line 13 │", text)
+        self.assertIn("sel ▶", text)
+        self.assertDrawnAsModeled(design_, module, text)
 
     def test_pipeline_of_sixteen_instances(self):
         # Four stages of four lanes, each lane also reading its neighbour: a
@@ -297,7 +301,18 @@ class OptimizationGoalTests(DiagramAssertions):
 class SpacingTests(DiagramAssertions):
     @classmethod
     def setUpClass(cls):
-        cls.design = rtlscope.load_verilator_json(COMBINATIONAL)
+        # The fixture's top without its initial block: three nets fanned out
+        # from the left edge to two multiplexers.
+        mux = cell_type("mux", ("sel", IN), ("a", IN), ("b", IN), ("y", OUT))
+        cls.design = design(
+            [],
+            ["sel", "a", "b", "y1", "y2"],
+            [mux],
+            [
+                ("u1", "mux", {"sel": "sel", "a": "a", "b": "b", "y": "y1"}),
+                ("u2", "mux", {"sel": "sel", "a": "a", "b": "b", "y": "y2"}),
+            ],
+        )
 
     def test_parallel_tracks_are_spread_when_there_is_room(self):
         text = rtlscope.render_diagram(self.design, self.design.top, 100)

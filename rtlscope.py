@@ -110,6 +110,28 @@ class Instance:
     connections: Dict[str, Expr] = field(default_factory=dict)
 
 
+@dataclass(frozen=True)
+class Process:
+    """A process of a module, seen only from outside: what it reads and writes.
+
+    Its contents are not modelled. ``kind`` is how it was written:
+    ``always_ff``, ``always_comb``, ``always_latch``, ``always``, ``assign``,
+    ``initial`` or ``final``. Signals are module-level ports and nets, in
+    declaration order; ``clocks`` are not repeated in ``reads``.
+    """
+
+    kind: str
+    line: Optional[int]
+    reads: Tuple[str, ...] = ()
+    writes: Tuple[str, ...] = ()
+    clocks: Tuple[str, ...] = ()
+
+    @property
+    def name(self) -> str:
+        """``always_ff, line 9``: how the source would point at it."""
+        return f"{self.kind}, line {self.line}" if self.line is not None else self.kind
+
+
 @dataclass
 class Module:
     # Unique within the design. A parameterized module elaborated with other
@@ -119,6 +141,7 @@ class Module:
     # Module-level signals that are not ports, in declaration order.
     nets: Dict[str, Net] = field(default_factory=dict)
     instances: Dict[str, Instance] = field(default_factory=dict)
+    processes: List[Process] = field(default_factory=list)
     source: str = ""  # the name written in the source; empty means ``name``
     # Overridable parameters and their elaborated values, in declaration order.
     params: Dict[str, str] = field(default_factory=dict)
@@ -185,6 +208,13 @@ class Design:
 
 _DIRECTIONS = {"INPUT": Direction.INPUT, "OUTPUT": Direction.OUTPUT, "INOUT": Direction.INOUT}
 _NON_NET_VAR_TYPES = {"GPARAM", "LPARAM", "GENVAR"}
+_PROCESS_KINDS = {
+    "always_ff": "always_ff",
+    "always_comb": "always_comb",
+    "always_latch": "always_latch",
+    "always": "always",
+    "cont_assign": "assign",
+}
 _UNLINKED = "UNLINKED"
 
 
@@ -280,35 +310,72 @@ class _VerilatorReader:
             modules[node["name"]] = self._read_signals(node)
         for node in module_nodes:
             self._read_instances(node, modules)
-        self._mark_clocks(module_nodes, modules)
+            modules[node["name"]].processes = self._read_processes(node, modules[node["name"]])
+        self._mark_clocks(modules)
         return Design(modules)
 
-    def _mark_clocks(self, module_nodes: List[Dict[str, Any]], modules: Dict[str, Module]) -> None:
-        """Mark clock ports, the way synthesis tells a clock from an async reset.
+    def _read_processes(self, node: Dict[str, Any], module: Module) -> List[Process]:
+        """Every process of a module, by the module signals it reads and writes.
 
-        In ``always_ff @(posedge clk or negedge rst_n)`` both are edges, but
-        the body tests ``rst_n`` and never reads ``clk``: an edge the process
-        does not read is its clock. A port wired to a child's clock is a clock
-        too, so a wrapper's ``clk`` is marked as well.
+        A clock is an edge in the sensitivity list that the body never reads.
+        That is how synthesis tells it from an asynchronous reset: in
+        ``always_ff @(posedge clk or negedge rst_n)`` both are edges, but the
+        body tests ``rst_n`` and never ``clk``.
         """
-        for node in module_nodes:
-            module = modules[node["name"]]
-            for stmt in node.get("stmtsp", []):
-                if stmt.get("type") != "ALWAYS":
-                    continue
-                edges = {
-                    ref.get("varp")
-                    for item in _walk(stmt.get("sentreep", []))
-                    if item.get("type") == "SENITEM" and item.get("edgeType") in ("POS", "NEG", "BOTH")
-                    for ref in item.get("sensp", [])
-                    if ref.get("type") == "VARREF"
-                }
-                read = {ref.get("varp") for ref in _walk(stmt.get("stmtsp", [])) if ref.get("type") == "VARREF"}
-                for addr in edges - read:
-                    owner = self.signals.get(addr)
-                    if owner and owner[0] == module.name and owner[1] in module.ports:
-                        port = module.ports[owner[1]]
-                        module.ports[port.name] = replace(port, clock=True)
+        order = {name: i for i, name in enumerate([*module.ports, *module.nets])}
+        processes = []
+        for stmt in node.get("stmtsp", []):
+            kind = stmt.get("type")
+            if kind == "ALWAYS":
+                kind = _PROCESS_KINDS.get(stmt.get("keyword"), "always")
+            elif kind in ("INITIAL", "FINAL"):
+                kind = kind.lower()
+            else:
+                continue
+
+            def signals(nodes: Any, accesses: Tuple[str, ...]) -> set:
+                found = set()
+                for ref in _walk(nodes):
+                    if ref.get("type") == "VARREF" and ref.get("access") in accesses:
+                        owner = self.signals.get(ref.get("varp"))
+                        # Block-local variables, like a loop index, are not module signals.
+                        if owner is not None and owner[0] == module.name:
+                            found.add(owner[1])
+                return found
+
+            body = stmt.get("stmtsp", [])
+            edges = {
+                name
+                for item in _walk(stmt.get("sentreep", []))
+                if item.get("type") == "SENITEM" and item.get("edgeType") in ("POS", "NEG", "BOTH")
+                for name in signals(item.get("sensp", []), ("RD", "RW"))
+            }
+            clocks = edges - signals(body, ("RD", "RW"))
+            reads = signals(stmt.get("sentreep", []), ("RD", "RW")) | signals(body, ("RD", "RW"))
+
+            def ordered(names: set) -> Tuple[str, ...]:
+                return tuple(sorted(names, key=order.__getitem__))
+
+            processes.append(
+                Process(kind, _line(stmt), ordered(reads - clocks), ordered(signals(body, ("WR", "RW"))), ordered(clocks))
+            )
+        return processes
+
+    @staticmethod
+    def _mark_clocks(modules: Dict[str, Module]) -> None:
+        """Mark the ports that clock a process, or a child's clock port."""
+
+        def mark(module: Module, name: str) -> bool:
+            port = module.ports.get(name)
+            if port is None or port.clock:
+                return False
+            module.ports[name] = replace(port, clock=True)
+            return True
+
+        for module in modules.values():
+            for process in module.processes:
+                for name in process.clocks:
+                    mark(module, name)
         changed = True
         while changed:
             changed = False
@@ -316,11 +383,8 @@ class _VerilatorReader:
                 for inst in module.instances.values():
                     for port in modules[inst.module].ports.values():
                         expr = inst.connections.get(port.name)
-                        if port.clock and isinstance(expr, NetRef) and expr.net in module.ports:
-                            outer = module.ports[expr.net]
-                            if not outer.clock:
-                                module.ports[outer.name] = replace(outer, clock=True)
-                                changed = True
+                        if port.clock and isinstance(expr, NetRef):
+                            changed |= mark(module, expr.net)
 
     def _resolve(self, node: Dict[str, Any], key: str) -> Dict[str, Any]:
         addr = node.get(key)
@@ -455,6 +519,11 @@ def render_module_text(design: Design, module: Module) -> List[str]:
         lines.append(f"  {port.direction.value:<6} {port.display}" + (" (clock)" if port.clock else ""))
     for net in module.nets.values():
         lines.append(f"  {'net':<6} {net.display}")
+    for process in module.processes:
+        lines.append(f"  process {process.name}")
+        for label, names in (("clock", process.clocks), ("reads", process.reads), ("writes", process.writes)):
+            if names:
+                lines.append(f"    {label:<6} {', '.join(names)}")
     for inst in module.instances.values():
         lines.append(f"  instance {inst.name} : {design.modules[inst.module].signature}")
         ports = list(design.modules[inst.module].ports.values())
@@ -643,31 +712,65 @@ def _pin_stub(end: Tuple[_Box, Port]) -> Stub:
     return end[0].stub(end[1])
 
 
-def _columns(design: Design, module: Module) -> List[List[Instance]]:
-    """Instances layered by their longest path from the module inputs."""
+@dataclass
+class _Cell:
+    """Something drawn as a box: an instance, or a process of the module."""
+
+    name: str
+    title: str
+    subtitle: str
+    ports: List[Port]
+    connections: Dict[str, Expr]
+
+
+def _cells(design: Design, module: Module) -> List[_Cell]:
+    cells = []
+    for inst in module.instances.values():
+        child = design.modules[inst.module]
+        title = f"{inst.name} : {child.source or child.name}"
+        cells.append(_Cell(inst.name, title, _params_text(child), list(child.ports.values()), inst.connections))
+    signals = {**module.nets, **module.ports}
+    taken = set(module.instances)
+    for process in module.processes:
+        name = process.name
+        while name in taken:
+            name += "'"
+        taken.add(name)
+        # A process box's pins are named after the signals they carry.
+        ports = [replace(_as_port(signals[n], Direction.INPUT), clock=True) for n in process.clocks]
+        ports += [_as_port(signals[n], Direction.INPUT) for n in process.reads]
+        ports += [_as_port(signals[n], Direction.OUTPUT) for n in process.writes]
+        connections = {p.name: NetRef(p.name) for p in ports}
+        cells.append(_Cell(name, name, "", ports, connections))
+    return cells
+
+
+def _as_port(signal: Union[Port, Net], direction: Direction) -> Port:
+    return Port(signal.name, direction, signal.bits)
+
+
+def _columns(cells: List[_Cell]) -> List[List[_Cell]]:
+    """Cells layered by their longest path from the module inputs."""
+    by_name = {cell.name: cell for cell in cells}
+
+    def nets(cell: _Cell, direction: Direction) -> List[str]:
+        refs = [cell.connections.get(p.name) for p in cell.ports if p.direction is direction]
+        return [r.net for r in refs if isinstance(r, NetRef)]
+
     drivers: Dict[str, List[str]] = {}
-    for inst in module.instances.values():
-        for port in design.modules[inst.module].ports.values():
-            expr = inst.connections.get(port.name)
-            if port.direction is Direction.OUTPUT and isinstance(expr, NetRef):
-                drivers.setdefault(expr.net, []).append(inst.name)
+    for cell in cells:
+        for net in nets(cell, Direction.OUTPUT):
+            drivers.setdefault(net, []).append(cell.name)
     preds: Dict[str, List[str]] = {}
-    for inst in module.instances.values():
-        preds[inst.name] = []
-        for port in design.modules[inst.module].ports.values():
-            expr = inst.connections.get(port.name)
-            if port.direction is Direction.INPUT and isinstance(expr, NetRef):
-                preds[inst.name] += [d for d in drivers.get(expr.net, []) if d != inst.name]
+    for cell in cells:
+        preds[cell.name] = []
+        for net in nets(cell, Direction.INPUT):
+            preds[cell.name] += [d for d in drivers.get(net, []) if d != cell.name]
 
     # Cut cycles where a forward walk from the inputs first closes them, so a
     # feedback wire runs right to left and everything else left to right.
     def external(name: str) -> bool:
-        inst = module.instances[name]
-        return any(
-            p.direction is Direction.INPUT and isinstance(inst.connections.get(p.name), NetRef)
-            and not drivers.get(inst.connections[p.name].net)
-            for p in design.modules[inst.module].ports.values()
-        )
+        return any(not drivers.get(net) for net in nets(by_name[name], Direction.INPUT))
 
     succs: Dict[str, List[str]] = {name: [] for name in preds}
     for name, sources in preds.items():
@@ -675,7 +778,7 @@ def _columns(design: Design, module: Module) -> List[List[Instance]]:
             succs[source].append(name)
     feedback = set()
     state: Dict[str, int] = {}  # 1 on the walk, 2 finished
-    for root in sorted(module.instances, key=lambda n: (bool(preds[n]) and not external(n))):
+    for root in sorted(by_name, key=lambda n: (bool(preds[n]) and not external(n))):
         if root in state:
             continue
         stack = [(root, iter(succs[root]))]
@@ -697,20 +800,20 @@ def _columns(design: Design, module: Module) -> List[List[Instance]]:
         levels = [depth[p] for p in preds[name] if (p, name) not in feedback]
         depth[name] = 1 + max(levels, default=-1)
 
-    columns: List[List[Instance]] = [[] for _ in range(max(depth.values(), default=-1) + 1)]
-    for inst in module.instances.values():
-        columns[depth[inst.name]].append(inst)
+    columns: List[List[_Cell]] = [[] for _ in range(max(depth.values(), default=-1) + 1)]
+    for cell in cells:
+        columns[depth[cell.name]].append(cell)
 
-    # Barycenter ordering: sit each instance near the ones that drive it.
+    # Barycenter ordering: sit each cell near the ones that drive it.
     position: Dict[str, int] = {}
     for column in columns:
-        def key(item: Tuple[int, Instance]) -> float:
-            index, inst = item
-            known = [position[p] for p in preds[inst.name] if p in position]
+        def key(item: Tuple[int, _Cell]) -> float:
+            index, cell = item
+            known = [position[p] for p in preds[cell.name] if p in position]
             return sum(known) / len(known) if known else index
 
-        column[:] = [inst for _, inst in sorted(enumerate(column), key=key)]
-        position.update((inst.name, i) for i, inst in enumerate(column))
+        column[:] = [cell for _, cell in sorted(enumerate(column), key=key)]
+        position.update((cell.name, i) for i, cell in enumerate(column))
     return columns
 
 
@@ -739,26 +842,27 @@ def _params_text(module: Module) -> str:
 
 
 def _plan(design: Design, module: Module) -> Tuple[List[List[_Box]], List[_Label], List[_Label], List[_Net]]:
+    cells = _columns(_cells(design, module))
     columns = [
         [
             _Box(
-                inst.name,
-                f"{inst.name} : {design.modules[inst.module].source or inst.module}",
-                _params_text(design.modules[inst.module]),
-                [p for p in design.modules[inst.module].ports.values() if p.direction is Direction.INPUT],
-                [p for p in design.modules[inst.module].ports.values() if p.direction is not Direction.INPUT],
+                cell.name,
+                cell.title,
+                cell.subtitle,
+                [p for p in cell.ports if p.direction is Direction.INPUT],
+                [p for p in cell.ports if p.direction is not Direction.INPUT],
                 slot=c + 1,
             )
-            for inst in insts
+            for cell in column
         ]
-        for c, insts in enumerate(_columns(design, module))
+        for c, column in enumerate(cells)
     ]
+    connections = {cell.name: cell.connections for column in cells for cell in column}
     nets = {name: _Net(name) for name in [*module.ports, *module.nets]}
     for column in columns:
         for box in column:
-            inst = module.instances[box.name]
             for port in box.left + box.right:
-                expr = inst.connections.get(port.name)
+                expr = connections[box.name].get(port.name)
                 if isinstance(expr, NetRef):
                     nets[expr.net].ends.append((box, port))
                     box.connected.append(port.name)
@@ -794,6 +898,13 @@ def _plan(design: Design, module: Module) -> Tuple[List[List[_Box]], List[_Label
     return columns, lefts, rights, list(nets.values())
 
 
+def _channel_of(end: _End, slot: int) -> int:
+    """The channel an end opens onto: right of its slot, or left of it."""
+    if isinstance(end, _Label):
+        return slot if end.left else slot - 1
+    return slot - 1 if end[1] in end[0].left else slot
+
+
 def _slot_of(end: _End, last: int) -> int:
     if isinstance(end, _Label):
         return 0 if end.left else last
@@ -808,20 +919,33 @@ def _place(columns, lefts, rights, nets, extra: int, vgap: int, max_width: int) 
     widths.append(max((l.width for l in rights), default=0))
     # A channel needs a track for each net crossing it, and room for the stub
     # and access cell of the pins on both sides.
+    # A net needs a track in a channel it crosses, or in one that two of its
+    # ends open onto, such as two input pins of the same column.
     tracks = [0] * last
     for net in nets:
+        if not net.ends:
+            continue
         slots = [_slot_of(end, last) for end in net.ends]
-        for gap in range(min(slots, default=0), max(slots, default=0)):
-            tracks[gap] += 1
-    base = sum(widths) + sum(t + 4 for t in tracks)
+        opening = [0] * last
+        for end, slot in zip(net.ends, slots):
+            opening[_channel_of(end, slot)] += 1
+        for gap in range(last):
+            if min(slots) <= gap < max(slots) or opening[gap] > 1:
+                tracks[gap] += 1
+    # Each side of a channel with pins holds their stubs and access cells; an
+    # outer channel has pins on one side only unless that edge has labels.
+    sides = [4] * last
+    sides[0] = 2 + (2 if lefts else 0)
+    sides[-1] = 2 + (2 if rights else 0)
+    base = sum(widths) + sum(t + side for t, side in zip(tracks, sides))
     if base > max_width:
         raise DiagramError(f"diagram needs at least {base} columns, but the width is {max_width}")
     # With room to spare, a free column between tracks keeps parallel wires apart.
-    spaced = [2 * t + 3 if t else 4 for t in tracks]
+    spaced = [2 * t - 1 + side if t else side for t, side in zip(tracks, sides)]
     if sum(widths) + sum(spaced) <= max_width:
         channels = spaced
     else:
-        channels = [t + 4 for t in tracks]
+        channels = [t + side for t, side in zip(tracks, sides)]
     extra = min(extra, (max_width - sum(widths) - sum(channels)) // last)
     gaps = [c + extra for c in channels]
 
@@ -1161,7 +1285,7 @@ def render_diagram(
     ``costs`` is the objective the routing minimizes. Raises DiagramError when
     the module does not fit, or does not fit in ``height`` rows when given.
     """
-    if not module.instances:
+    if not module.instances and not module.processes:
         box = _Box(module.name, module.source or module.name, _params_text(module), [p for p in module.ports.values() if p.direction is Direction.INPUT],
                    [p for p in module.ports.values() if p.direction is not Direction.INPUT], slot=0)
         text: Dict[Cell, str] = {}

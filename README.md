@@ -61,19 +61,19 @@ testbench that instantiates two 2:1 multiplexers, one written with
 
 ```text
 $ python3 rtlscope.py tests/fixtures/Vtb_combinational.tree.json
-              ┌─────────────────────────┐
-              │ u_proc : mux_procedural │
-sel ───────┬──┤sel                     y├──────── y_proc
-a ───────┬─┼──┤a                        │
-b ─────┬─┼─┼──┤b                        │
-       │ │ │  └─────────────────────────┘
-       │ │ │
-       │ │ │  ┌─────────────────────────┐
-       │ │ │  │ u_cont : mux_continuous │
-       │ │ └──┤sel                     y├──────── y_cont
-       │ └────┤a                        │
-       └──────┤b                        │
-              └─────────────────────────┘
+                             ┌─────────────────────────┐
+                             │ u_proc : mux_procedural │
+                     ┌────┬──┤sel                     y├──────── y_proc
+┌──────────────────┐ │ ┌──┼──┤a                        │
+│ initial, line 40 │ │ │  │┌─┤b                        │
+│               sel├─┘ │  ││ └─────────────────────────┘
+│                 a├───┤  ││
+│                 b├─┬─┼──┼┘ ┌─────────────────────────┐
+└──────────────────┘ │ │  │  │ u_cont : mux_continuous │
+                     │ │  └──┤sel                     y├──────── y_cont
+                     │ └─────┤a                        │
+                     └───────┤b                        │
+                             └─────────────────────────┘
 ```
 
 Reading the diagram:
@@ -81,18 +81,41 @@ Reading the diagram:
 ```text
 │ u4 : rev │         an instance, then the module it instantiates,
 │ #(W=4)   │         with the parameter values it was elaborated with
+always_ff, line 9    a process box: its kind and where it starts in the source
 ┤a  y├               inputs on the left edge; outputs and inouts on the right
 d[7:0]               a bus, with its declared range
 ┤▷clk                a clock input
-sel ──   ── y_proc   a net driven, or read, by logic that is not drawn
+sel ──   ── y_proc   a net driven or read by nothing drawn in this module
 clk ▶  ▶ q  ◆ io     ports of the module being drawn: input, output, inout
 ┬ ┴ ├ ┤              a net branches
 ┼                    two different nets cross; never a connection
 ?┤                   connected to an expression rtlscope cannot show yet
 ```
 
-Only structure is extracted. The multiplexers' `always_comb` and `assign`
-bodies, and the testbench's `initial` block, are not drawn.
+Each process is a box too: here the testbench's `initial` block, which drives
+`sel`, `a` and `b`. A process is drawn by the signals it reads and writes, not
+by what it computes, so a flat module with no instances is still a circuit of
+registers and combinational blocks:
+
+```text
+$ python3 rtlscope.py examples/Vtimer.tree.json
+                                                   ┌──────────────────────────────────▶ value[3:0]
+                                                   │
+                                                   │ ┌──────────────────────┐
+                                                   │ │ always_comb, line 15 │
+                  ┌─────────────────────┐ ┌───────┬┴─┤value[3:0]   next[3:0]├─┐
+                  │  always_ff, line 19 │ │ ┌─────┼──┤running               │ │
+clk ▶─────────────┤▷clk       value[3:0]├─┘ │     │  └──────────────────────┘ │
+rst_n ▶───────────┤rst_n         running├───┘     │                           │
+start ▶───────────┤start                │ ┌───────┼───────────────────────────┘
+              ┌───┤done                 │ │       │
+              │ ┌─┤next[3:0]            │ │       │    ┌─────────────────┐
+              │ │ └─────────────────────┘ │       │    │ assign, line 30 │
+              │ │                         │       └────┤value[3:0]   done├─┬──────────▶ done
+              │ └─────────────────────────┘            └─────────────────┘ │
+              │                                                            │
+              └────────────────────────────────────────────────────────────┘
+```
 
 `--format text` prints the same connectivity as a list, and shows what an
 unsupported pin is connected to, for example `input  sel <- ? SEL (line 37)`.
@@ -108,6 +131,7 @@ python3 rtlscope.py examples/Vcounter.tree.json      # a register fed back throu
 python3 rtlscope.py examples/Vpipeline.tree.json     # a two-stage pipelined adder
 python3 rtlscope.py examples/Vparameters.tree.json   # one module at two parameter values
 python3 rtlscope.py examples/Vshift_register.tree.json  # flip-flops with an asynchronous reset
+python3 rtlscope.py examples/Vtimer.tree.json        # a flat module: a register and combinational logic
 ```
 
 Regenerating them needs Verilator 5.022 or newer, for `--json-only`; the

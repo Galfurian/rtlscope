@@ -15,6 +15,8 @@ module tb_combinational
   net    b
   net    y_proc
   net    y_cont
+  process initial, line 40
+    writes sel, a, b
   instance u_proc : mux_procedural
     input  sel <- sel
     input  a   <- a
@@ -44,7 +46,7 @@ class CLITests(unittest.TestCase):
     def test_diagram_of_child_module(self):
         code, out, err = run_main(COMBINATIONAL, "--module", "mux_continuous", "--width", "80")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(out.splitlines()[1], "│ mux_continuous │")
+        self.assertEqual(out.splitlines()[1].strip(), "│ assign, line 25 │")
 
     def test_diagram_too_narrow_or_short(self):
         for args, message in (
