@@ -42,8 +42,9 @@ python3 rtlscope.py design.tree.json --format text       # whole hierarchy, as t
 ```
 
 `--optimize` steers the routing towards `length` (short wires), `bends`
-(straight wires) or `crossings` (few crossings). Name several, separated by
-commas, to mix them: `--optimize crossings,bends`.
+(straight wires), `crossings` (few crossings) or `spacing` (vertical wires
+kept apart). Name several, separated by commas, to mix them:
+`--optimize crossings,bends`.
 
 The diagram defaults to the terminal width. A module that cannot be drawn
 within `--width`, or within `--height` when given, is an error that says how
@@ -60,19 +61,19 @@ testbench that instantiates two 2:1 multiplexers, one written with
 
 ```text
 $ python3 rtlscope.py tests/fixtures/Vtb_combinational.tree.json
-            ┌─────────────────────────┐
-            │ u_proc : mux_procedural │
-sel ─────┬──┤sel                     y├─────── y_proc
-a ──────┬┼──┤a                        │
-b ─────┬┼┼──┤b                        │
-       │││  └─────────────────────────┘
-       │││
-       │││  ┌─────────────────────────┐
-       │││  │ u_cont : mux_continuous │
-       ││└──┤sel                     y├─────── y_cont
-       │└───┤a                        │
-       └────┤b                        │
-            └─────────────────────────┘
+              ┌─────────────────────────┐
+              │ u_proc : mux_procedural │
+sel ───────┬──┤sel                     y├──────── y_proc
+a ───────┬─┼──┤a                        │
+b ─────┬─┼─┼──┤b                        │
+       │ │ │  └─────────────────────────┘
+       │ │ │
+       │ │ │  ┌─────────────────────────┐
+       │ │ │  │ u_cont : mux_continuous │
+       │ │ └──┤sel                     y├──────── y_cont
+       │ └────┤a                        │
+       └──────┤b                        │
+              └─────────────────────────┘
 ```
 
 Reading the diagram:

@@ -36,8 +36,10 @@ in the terminal. There is no interactive UI yet.
 - Edge labels are placed like unconstrained I/O pins: each goes to the row of
   its edge that the cheapest wire reaches, rather than to a row chosen in
   advance.
-- `--optimize` favours short wires (`length`), straight ones (`bends`) or few
-  crossings (`crossings`), or a mix of them. The routing is tried in several
+- `--optimize` favours short wires (`length`), straight ones (`bends`), few
+  crossings (`crossings`) or vertical wires kept apart (`spacing`), or a mix
+  of them. Spacing is on by default, so a fan-out reads `│ │ │` rather than
+  `│││` whenever the width leaves room. The routing is tried in several
   net orders and the drawing that scores best for the chosen goals is kept.
 - `--width` and `--height` bound the diagram; one that does not fit is an
   error saying how much room it needs. The width defaults to the terminal.

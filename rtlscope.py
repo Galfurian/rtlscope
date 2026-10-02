@@ -501,7 +501,7 @@ _ATTEMPTS = 6
 # What --optimize can favour. Each goal is one term of the cost the router
 # minimizes, and naming it multiplies that term by _EMPHASIS; naming several
 # mixes them.
-GOALS = ("length", "bends", "crossings")
+GOALS = ("length", "bends", "crossings", "spacing")
 _EMPHASIS = 5
 
 Cell = Tuple[int, int]
@@ -514,11 +514,13 @@ class DiagramError(RTLScopeError):
 
 @dataclass(frozen=True)
 class Costs:
-    """The routing objective: what a wire cell, a bend and a crossing cost."""
+    """The routing objective: what a wire cell, a bend, a crossing and a
+    vertical wire right beside another net's vertical wire cost."""
 
     length: int = 1
     bends: int = 2
     crossings: int = 3
+    spacing: int = 1
 
     @classmethod
     def favouring(cls, goals: Sequence[str]) -> "Costs":
@@ -814,8 +816,14 @@ def _place(columns, lefts, rights, nets, extra: int, vgap: int, max_width: int) 
     base = sum(widths) + sum(t + 4 for t in tracks)
     if base > max_width:
         raise DiagramError(f"diagram needs at least {base} columns, but the width is {max_width}")
-    extra = min(extra, (max_width - base) // last)
-    gaps = [t + 4 + extra for t in tracks]
+    # With room to spare, a free column between tracks keeps parallel wires apart.
+    spaced = [2 * t + 3 if t else 4 for t in tracks]
+    if sum(widths) + sum(spaced) <= max_width:
+        channels = spaced
+    else:
+        channels = [t + 4 for t in tracks]
+    extra = min(extra, (max_width - sum(widths) - sum(channels)) // last)
+    gaps = [c + extra for c in channels]
 
     xs = [0]
     for width, gap in zip(widths, gaps):
@@ -991,6 +999,7 @@ class _Router:
                     continue
                 masks = self.wires.get(nxt, {})
                 step_cost = self.costs.length + (self.costs.bends if heading and step != heading else 0)
+                step_cost += self.costs.spacing * self._neighbours(net, nxt, step)
                 if nxt in tree:
                     back = _OPPOSITE[step]
                     mask = masks[net]
@@ -1013,6 +1022,21 @@ class _Router:
                 heapq.heappush(frontier, (cost + step_cost, counter, nxt, step))
         return None
 
+    def _neighbours(self, net: str, cell: Cell, step: int) -> int:
+        """Other nets' vertical wires in the cells beside a vertical step.
+
+        Only vertical runs count: horizontal wires into consecutive pins of a
+        box are one row apart by construction, while vertical tracks in a
+        channel can be spread whenever there is room.
+        """
+        if step in (E, W):
+            return 0
+        count = 0
+        for dx in (-1, 1):
+            for other, mask in self.wires.get((cell[0] + dx, cell[1]), {}).items():
+                count += other != net and bool(mask & (N | S))
+        return count
+
     @staticmethod
     def _path(parent, state):
         states = []
@@ -1025,13 +1049,22 @@ class _Router:
 
     def score(self) -> int:
         """The objective over the finished drawing, which is what orders compete on."""
-        length = bends = crossings = 0
-        for masks in self.wires.values():
+        length = bends = crossings = crowding = 0
+        for (x, y), masks in self.wires.items():
             crossings += len(masks) > 1
-            for mask in masks.values():
+            for net, mask in masks.items():
                 length += 1
                 bends += mask in (E | S, S | W, N | E, N | W)
-        return length * self.costs.length + bends * self.costs.bends + crossings * self.costs.crossings
+                # Vertical wires side by side, each pair counted once.
+                if mask & (N | S):
+                    right = self.wires.get((x + 1, y), {})
+                    crowding += sum(other != net and bool(m & (N | S)) for other, m in right.items())
+        return (
+            length * self.costs.length
+            + bends * self.costs.bends
+            + crossings * self.costs.crossings
+            + crowding * self.costs.spacing
+        )
 
     def render(self) -> List[str]:
         lines = []

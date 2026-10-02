@@ -288,8 +288,14 @@ are therefore ordered along an edge by what suits the wiring, not by
 declaration order.
 
 **Optimize.** The costs are the objective: by default 1 per wire cell, 2 per
-bend and 3 per crossing, so a crossing is worth three cells of detour.
-`--optimize` names goals among `length`, `bends` and `crossings`; each named
+bend, 3 per crossing, so a crossing is worth three cells of detour, and 1 per
+cell where a vertical wire runs right beside another net's. Only vertical
+runs count for spacing: wires into consecutive pins of a box are one row
+apart by construction, while tracks in a channel can be spread. When the
+width allows it, channels are sized with a free column between tracks so
+there is room to spread them; otherwise they fall back to one column per
+track. `--optimize` names goals among `length`, `bends`, `crossings` and
+`spacing`; each named
 goal multiplies its cost by 5, and naming several mixes them, the way a
 synthesis run trades area against delay.
 

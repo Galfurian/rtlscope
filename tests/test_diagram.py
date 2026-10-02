@@ -11,19 +11,19 @@ from verilator_snippets import COMBINATIONAL
 IN, OUT, IO = Direction.INPUT, Direction.OUTPUT, Direction.INOUT
 
 COMBINATIONAL_DIAGRAM = """\
-            ┌─────────────────────────┐
-            │ u_proc : mux_procedural │
-sel ─────┬──┤sel                     y├─────── y_proc
-a ──────┬┼──┤a                        │
-b ─────┬┼┼──┤b                        │
-       │││  └─────────────────────────┘
-       │││
-       │││  ┌─────────────────────────┐
-       │││  │ u_cont : mux_continuous │
-       ││└──┤sel                     y├─────── y_cont
-       │└───┤a                        │
-       └────┤b                        │
-            └─────────────────────────┘
+              ┌─────────────────────────┐
+              │ u_proc : mux_procedural │
+sel ───────┬──┤sel                     y├──────── y_proc
+a ───────┬─┼──┤a                        │
+b ─────┬─┼─┼──┤b                        │
+       │ │ │  └─────────────────────────┘
+       │ │ │
+       │ │ │  ┌─────────────────────────┐
+       │ │ │  │ u_cont : mux_continuous │
+       │ │ └──┤sel                     y├──────── y_cont
+       │ └────┤a                        │
+       └──────┤b                        │
+              └─────────────────────────┘
 """
 
 
@@ -292,3 +292,31 @@ class OptimizationGoalTests(DiagramAssertions):
         self.assertLess(self.wire_cells(short), self.wire_cells(clean))
         for text in (short, clean, self.draw("crossings", "bends")):
             self.assertDrawnAsModeled(self.counter, self.counter.top, text)
+
+
+class SpacingTests(DiagramAssertions):
+    @classmethod
+    def setUpClass(cls):
+        cls.design = rtlscope.load_verilator_json(COMBINATIONAL)
+
+    def test_parallel_tracks_are_spread_when_there_is_room(self):
+        text = rtlscope.render_diagram(self.design, self.design.top, 100)
+        outside = [row[: row.find("┌")] if "┌" in row else row for row in text.splitlines()]
+        self.assertFalse([row for row in outside if "││" in row], text)
+        self.assertDrawnAsModeled(self.design, self.design.top, text)
+
+    def test_narrowest_width_still_routes(self):
+        width = 100
+        while True:
+            try:
+                rtlscope.render_diagram(self.design, self.design.top, width - 1)
+            except DiagramError:
+                break
+            width -= 1
+        text = rtlscope.render_diagram(self.design, self.design.top, width)
+        # Channels fall back to one column per track; the drawing stays correct.
+        self.assertLessEqual(max(map(len, text.splitlines())), width)
+        self.assertDrawnAsModeled(self.design, self.design.top, text)
+
+    def test_spacing_goal(self):
+        self.assertEqual(rtlscope.Costs.favouring(["spacing"]), rtlscope.Costs(1, 2, 3, 5))
