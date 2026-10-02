@@ -10,7 +10,7 @@ import os
 import shutil
 import sys
 import traceback
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from enum import Enum
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple, Union
@@ -60,6 +60,7 @@ class Port:
     name: str
     direction: Direction
     bits: Optional[Bits] = None  # None for a single bit
+    clock: bool = False  # an edge that clocks the module, or its children
 
     @property
     def display(self) -> str:
@@ -279,7 +280,47 @@ class _VerilatorReader:
             modules[node["name"]] = self._read_signals(node)
         for node in module_nodes:
             self._read_instances(node, modules)
+        self._mark_clocks(module_nodes, modules)
         return Design(modules)
+
+    def _mark_clocks(self, module_nodes: List[Dict[str, Any]], modules: Dict[str, Module]) -> None:
+        """Mark clock ports, the way synthesis tells a clock from an async reset.
+
+        In ``always_ff @(posedge clk or negedge rst_n)`` both are edges, but
+        the body tests ``rst_n`` and never reads ``clk``: an edge the process
+        does not read is its clock. A port wired to a child's clock is a clock
+        too, so a wrapper's ``clk`` is marked as well.
+        """
+        for node in module_nodes:
+            module = modules[node["name"]]
+            for stmt in node.get("stmtsp", []):
+                if stmt.get("type") != "ALWAYS":
+                    continue
+                edges = {
+                    ref.get("varp")
+                    for item in _walk(stmt.get("sentreep", []))
+                    if item.get("type") == "SENITEM" and item.get("edgeType") in ("POS", "NEG", "BOTH")
+                    for ref in item.get("sensp", [])
+                    if ref.get("type") == "VARREF"
+                }
+                read = {ref.get("varp") for ref in _walk(stmt.get("stmtsp", [])) if ref.get("type") == "VARREF"}
+                for addr in edges - read:
+                    owner = self.signals.get(addr)
+                    if owner and owner[0] == module.name and owner[1] in module.ports:
+                        port = module.ports[owner[1]]
+                        module.ports[port.name] = replace(port, clock=True)
+        changed = True
+        while changed:
+            changed = False
+            for module in modules.values():
+                for inst in module.instances.values():
+                    for port in modules[inst.module].ports.values():
+                        expr = inst.connections.get(port.name)
+                        if port.clock and isinstance(expr, NetRef) and expr.net in module.ports:
+                            outer = module.ports[expr.net]
+                            if not outer.clock:
+                                module.ports[outer.name] = replace(outer, clock=True)
+                                changed = True
 
     def _resolve(self, node: Dict[str, Any], key: str) -> Dict[str, Any]:
         addr = node.get(key)
@@ -411,7 +452,7 @@ def render_module_text(design: Design, module: Module) -> List[str]:
         header += f"  ({module.signature})"
     lines = [header]
     for port in module.ports.values():
-        lines.append(f"  {port.direction.value:<6} {port.display}")
+        lines.append(f"  {port.direction.value:<6} {port.display}" + (" (clock)" if port.clock else ""))
     for net in module.nets.values():
         lines.append(f"  {'net':<6} {net.display}")
     for inst in module.instances.values():
@@ -488,6 +529,11 @@ class Costs:
         return cls(*(getattr(base, g) * (_EMPHASIS if g in goals else 1) for g in GOALS))
 
 
+def _pin_text(port: Port) -> str:
+    """A port as written inside a box; "▷" is the flip-flop symbol's clock."""
+    return ("▷" if port.clock else "") + port.display
+
+
 @dataclass
 class _Box:
     name: str  # the instance, or the module for a lone box
@@ -504,8 +550,8 @@ class _Box:
 
     @property
     def inner(self) -> int:
-        lw = max((len(p.display) for p in self.left), default=0)
-        rw = max((len(p.display) for p in self.right), default=0)
+        lw = max((len(_pin_text(p)) for p in self.left), default=0)
+        rw = max((len(_pin_text(p)) for p in self.right), default=0)
         return max(len(self.title) + 2, len(self.subtitle) + 2, lw + rw + (2 if lw and rw else 0))
 
     @property
@@ -533,8 +579,8 @@ class _Box:
         for i in range(max(len(self.left), len(self.right))):
             lport = self.left[i] if i < len(self.left) else None
             rport = self.right[i] if i < len(self.right) else None
-            lname = lport.display if lport else ""
-            rname = rport.display if rport else ""
+            lname = _pin_text(lport) if lport else ""
+            rname = _pin_text(rport) if rport else ""
             lchar = "┤" if lport and lport.name in self.connected else "│"
             rchar = "├" if rport and rport.name in self.connected else "│"
             rows.append(lchar + lname.ljust(inner - len(rname)) + rname + rchar)

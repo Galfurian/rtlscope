@@ -17,6 +17,9 @@ in the terminal. There is no interactive UI yet.
   example `d[7:0]`.
 - Show parameterized modules by their source name and elaborated parameter
   values, `bit_reverse #(WIDTH=4)`, instead of Verilator's `bit_reverse__W4`.
+- Recognize clock ports by the rule synthesis uses, an edge the process body
+  never reads, so an asynchronous reset is not mistaken for one. Clocks are
+  drawn `┤▷clk` and marked `(clock)` in the text dump.
 - Keep pin expressions other than a plain net reference as explicitly
   unsupported, with their kind and source line.
 - Reject generate blocks, instance arrays, interface instances, unresolved
@@ -43,7 +46,8 @@ in the terminal. There is no interactive UI yet.
 
 ### Examples
 
-- `examples/` holds a full adder, a counter, a pipelined adder and a module
-  instantiated at two parameter values, each as
+- `examples/` holds a full adder, a counter, a pipelined adder, a module
+  instantiated at two parameter values and a shift register with an
+  asynchronous reset, each as
   SystemVerilog next to the Verilator JSON generated from it. The test suite
   draws every one and checks the drawing against the model.

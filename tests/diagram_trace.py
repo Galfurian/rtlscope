@@ -20,8 +20,8 @@ BITS = re.compile(r"\[-?\d+:-?\d+\]$")
 
 
 def bare(name):
-    """A port or net name without its declared range: "d[7:0]" is "d"."""
-    return BITS.sub("", name)
+    """A port or net name without clock marker or range: "▷d[7:0]" is "d"."""
+    return BITS.sub("", name.lstrip("▷"))
 
 
 class Diagram:

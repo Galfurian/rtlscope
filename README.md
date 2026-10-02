@@ -82,6 +82,7 @@ Reading the diagram:
 │ #(W=4)   │         with the parameter values it was elaborated with
 ┤a  y├               inputs on the left edge; outputs and inouts on the right
 d[7:0]               a bus, with its declared range
+┤▷clk                a clock input
 sel ──   ── y_proc   a net driven, or read, by logic that is not drawn
 clk ▶  ▶ q  ◆ io     ports of the module being drawn: input, output, inout
 ┬ ┴ ├ ┤              a net branches
@@ -105,6 +106,7 @@ python3 rtlscope.py examples/Vfull_adder.tree.json   # two half adders and an OR
 python3 rtlscope.py examples/Vcounter.tree.json      # a register fed back through an incrementer
 python3 rtlscope.py examples/Vpipeline.tree.json     # a two-stage pipelined adder
 python3 rtlscope.py examples/Vparameters.tree.json   # one module at two parameter values
+python3 rtlscope.py examples/Vshift_register.tree.json  # flip-flops with an asynchronous reset
 ```
 
 Regenerating them needs Verilator 5.022 or newer, for `--json-only`; the
