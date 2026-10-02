@@ -82,6 +82,7 @@ Reading the diagram:
 ```text
 ┌────┐               an instance: instance name, then module name
 ┤a  y├               inputs on the left edge; outputs and inouts on the right
+d[7:0]               a bus, with its declared range
 sel ──   ── y_proc   a net driven, or read, by logic that is not drawn
 clk ▶  ▶ q  ◆ io     ports of the module being drawn: input, output, inout
 ┬ ┴ ├ ┤              a net branches

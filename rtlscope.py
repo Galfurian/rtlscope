@@ -41,9 +41,41 @@ class Direction(Enum):
 
 
 @dataclass(frozen=True)
+class Bits:
+    """A packed range as declared, ``[msb:lsb]``; either end may be the larger."""
+
+    msb: int
+    lsb: int
+
+    @property
+    def width(self) -> int:
+        return abs(self.msb - self.lsb) + 1
+
+    def __str__(self) -> str:
+        return f"[{self.msb}:{self.lsb}]"
+
+
+@dataclass(frozen=True)
 class Port:
     name: str
     direction: Direction
+    bits: Optional[Bits] = None  # None for a single bit
+
+    @property
+    def display(self) -> str:
+        return self.name + (str(self.bits) if self.bits else "")
+
+
+@dataclass(frozen=True)
+class Net:
+    """A module-level signal that is not a port."""
+
+    name: str
+    bits: Optional[Bits] = None  # None for a single bit
+
+    @property
+    def display(self) -> str:
+        return self.name + (str(self.bits) if self.bits else "")
 
 
 @dataclass(frozen=True)
@@ -82,7 +114,7 @@ class Module:
     name: str
     ports: Dict[str, Port] = field(default_factory=dict)
     # Module-level signals that are not ports, in declaration order.
-    nets: List[str] = field(default_factory=list)
+    nets: Dict[str, Net] = field(default_factory=dict)
     instances: Dict[str, Instance] = field(default_factory=dict)
 
 
@@ -216,6 +248,25 @@ class _VerilatorReader:
             raise VerilatorJSONError(f"{_describe(node)}: unresolved {key} ({addr})")
         return target
 
+    def _bits(self, var: Dict[str, Any]) -> Optional[Bits]:
+        """The packed range of a variable, following typedef references."""
+        dtype = self._resolve(var, "dtypep")
+        for _ in range(16):
+            if dtype.get("type") == "BASICDTYPE":
+                if "range" not in dtype:
+                    return None
+                msb, _, lsb = dtype["range"].partition(":")
+                try:
+                    return Bits(int(msb), int(lsb))
+                except ValueError:
+                    raise VerilatorJSONError(f"{_describe(var)}: unreadable range {dtype['range']!r}") from None
+            # A typedef and an enum are as wide as the type they refer to.
+            if dtype.get("type") not in ("REFDTYPE", "ENUMDTYPE"):
+                break
+            dtype = self._resolve(dtype, "refDTypep")
+        kind = {"PACKARRAYDTYPE": "multi-dimensional packed arrays"}.get(dtype.get("type"), f"data type {dtype.get('type')}")
+        raise VerilatorJSONError(f"{_describe(var)}: {kind} not supported yet")
+
     def _read_signals(self, node: Dict[str, Any]) -> Module:
         module = Module(node["name"])
         for stmt in node.get("stmtsp", []):
@@ -224,7 +275,7 @@ class _VerilatorReader:
             name = stmt["name"]
             direction = stmt.get("direction", "NONE")
             if direction in _DIRECTIONS:
-                port = Port(name, _DIRECTIONS[direction])
+                port = Port(name, _DIRECTIONS[direction], self._bits(stmt))
                 module.ports[name] = port
                 self.ports[stmt["addr"]] = port
             elif direction != "NONE":
@@ -232,7 +283,7 @@ class _VerilatorReader:
             elif stmt.get("varType") in _NON_NET_VAR_TYPES:
                 continue
             else:
-                module.nets.append(name)
+                module.nets[name] = Net(name, self._bits(stmt))
             self.signals[stmt["addr"]] = (module.name, name)
         return module
 
@@ -315,20 +366,20 @@ def _expr_text(expr: Expr) -> str:
 def render_module_text(design: Design, module: Module) -> List[str]:
     lines = [f"module {module.name}"]
     for port in module.ports.values():
-        lines.append(f"  {port.direction.value:<6} {port.name}")
-    for net in module.nets:
-        lines.append(f"  {'net':<6} {net}")
+        lines.append(f"  {port.direction.value:<6} {port.display}")
+    for net in module.nets.values():
+        lines.append(f"  {'net':<6} {net.display}")
     for inst in module.instances.values():
         lines.append(f"  instance {inst.name} : {inst.module}")
         ports = list(design.modules[inst.module].ports.values())
-        width = max((len(p.name) for p in ports), default=0)
+        width = max((len(p.display) for p in ports), default=0)
         for port in ports:
             expr = inst.connections.get(port.name)
             if expr is None:
                 target = "(unconnected)"
             else:
                 target = f"{_ARROWS[port.direction]} {_expr_text(expr)}"
-            lines.append(f"    {port.direction.value:<6} {port.name:<{width}} {target}")
+            lines.append(f"    {port.direction.value:<6} {port.display:<{width}} {target}")
     return lines
 
 
@@ -407,9 +458,9 @@ class _Box:
 
     @property
     def inner(self) -> int:
-        lw = max((len(p.name) for p in self.left), default=0)
-        rw = max((len(p.name) for p in self.right), default=0)
-        return max(len(self.title), len(self.subtitle), lw + rw + (1 if lw and rw else 0))
+        lw = max((len(p.display) for p in self.left), default=0)
+        rw = max((len(p.display) for p in self.right), default=0)
+        return max(len(self.title), len(self.subtitle), lw + rw + (2 if lw and rw else 0))
 
     @property
     def width(self) -> int:
@@ -436,8 +487,8 @@ class _Box:
         for i in range(max(len(self.left), len(self.right))):
             lport = self.left[i] if i < len(self.left) else None
             rport = self.right[i] if i < len(self.right) else None
-            lname = lport.name if lport else ""
-            rname = rport.name if rport else ""
+            lname = lport.display if lport else ""
+            rname = rport.display if rport else ""
             lchar = "┤" if lport and lport.name in self.connected else "│"
             rchar = "├" if rport and rport.name in self.connected else "│"
             rows.append(lchar + lname.ljust(inner - len(rname)) + rname + rchar)
@@ -625,14 +676,14 @@ def _plan(design: Design, module: Module) -> Tuple[List[List[_Box]], List[_Label
             source = port.direction is Direction.INPUT
             sink = not source
             marker = {Direction.INPUT: "▶", Direction.OUTPUT: "▶", Direction.INOUT: "◆"}[port.direction]
-            text, pad = (f"{net.name} {marker}", 0) if source else (f"{marker} {net.name}", 0)
+            text, pad = (f"{port.display} {marker}", 0) if source else (f"{marker} {port.display}", 0)
         elif not net.ends:
             continue
         else:
             # Driven or read by logic rtlscope does not draw: show where it leaves.
             source = not directions & {Direction.OUTPUT, Direction.INOUT}
             sink = not directions & {Direction.INPUT, Direction.INOUT}
-            text, pad = net.name, 1
+            text, pad = module.nets[net.name].display, 1
         if source:
             label = _Label(text, True, pad)
             lefts.append(label)

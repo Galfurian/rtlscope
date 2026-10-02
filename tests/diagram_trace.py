@@ -16,6 +16,12 @@ WIRES = {
     "├": N | E | S, "┤": N | S | W, "┬": E | S | W, "┴": N | E | W,
 }
 NAME = re.compile(r"[^\s▶◆]+")
+BITS = re.compile(r"\[-?\d+:-?\d+\]$")
+
+
+def bare(name):
+    """A port or net name without its declared range: "d[7:0]" is "d"."""
+    return BITS.sub("", name)
 
 
 class Diagram:
@@ -59,9 +65,9 @@ class Diagram:
                 for r in range(y + 1, y2):
                     content = self.rows[r][x + 1 : x2]
                     if self.char(x, r) == "┤":
-                        pins[(x - 1, r)] = (title, content.split()[0])
+                        pins[(x - 1, r)] = (title, bare(content.split()[0]))
                     if self.char(x2, r) == "├":
-                        pins[(x2 + 1, r)] = (title, content.split()[-1])
+                        pins[(x2 + 1, r)] = (title, bare(content.split()[-1]))
                 cells = {(cx, cy) for cx in range(x, x2 + 1) for cy in range(y, y2 + 1)}
                 boxes.append({"title": title, "x": x, "y": y, "pins": pins, "cells": cells})
         return boxes
@@ -74,10 +80,10 @@ class Diagram:
         row = self.rows[y]
         if step == W:
             names = NAME.findall(row[: x + 1])
-            return names[-1] if names else None
+            return bare(names[-1]) if names else None
         if step == E:
             names = NAME.findall(row[x:])
-            return names[0] if names else None
+            return bare(names[0]) if names else None
         return None
 
     def trace(self, start):

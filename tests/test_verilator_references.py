@@ -53,7 +53,7 @@ class ReferenceResolutionTests(unittest.TestCase):
     def test_parameters_are_not_nets(self):
         tree = buffer_design(top_stmts=[var("(V_w)", "WIDTH", var_type="GPARAM")])
         design = rtlscope.parse_verilator_tree(tree)
-        self.assertEqual(design.top.nets, ["x", "y"])
+        self.assertEqual(list(design.top.nets), ["x", "y"])
 
     def test_three_levels_of_hierarchy(self):
         tree = netlist(

@@ -4,7 +4,7 @@ import random
 import unittest
 
 import rtlscope
-from rtlscope import Design, DiagramError, Direction, Instance, Module, NetRef, Port, Unsupported
+from rtlscope import Design, DiagramError, Direction, Instance, Module, Net, NetRef, Port, Unsupported
 from diagram_trace import Diagram
 from verilator_snippets import COMBINATIONAL
 
@@ -38,7 +38,7 @@ def design(top_ports, nets, cell_types, instances):
     top = Module(
         "top",
         ports={p: Port(p, d) for p, d in top_ports},
-        nets=list(nets),
+        nets={n: Net(n) for n in nets},
         instances={
             name: Instance(name, kind, {port: NetRef(net) for port, net in conns.items()})
             for name, kind, conns in instances

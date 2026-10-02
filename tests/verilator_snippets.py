@@ -20,7 +20,16 @@ def loc(line):
     return f"e,{line}:1,{line}:2"
 
 
-def var(addr, name, direction="NONE", var_type=None, line=1):
+# The type table every synthetic netlist carries: a single bit and two vectors.
+LOGIC, LOGIC4, LOGIC8 = "(T1)", "(T4)", "(T8)"
+TYPES = [
+    {"type": "BASICDTYPE", "name": "logic", "addr": LOGIC, "keyword": "logic"},
+    {"type": "BASICDTYPE", "name": "logic", "addr": LOGIC4, "keyword": "logic", "range": "3:0"},
+    {"type": "BASICDTYPE", "name": "logic", "addr": LOGIC8, "keyword": "logic", "range": "7:0"},
+]
+
+
+def var(addr, name, direction="NONE", var_type=None, line=1, dtype=LOGIC):
     if var_type is None:
         var_type = "VAR" if direction == "NONE" else "PORT"
     return {
@@ -28,6 +37,7 @@ def var(addr, name, direction="NONE", var_type=None, line=1):
         "name": name,
         "addr": addr,
         "loc": loc(line),
+        "dtypep": dtype,
         "direction": direction,
         "varType": var_type,
     }
@@ -59,8 +69,14 @@ def module(addr, name, *stmts, kind="MODULE"):
     return {"type": kind, "name": name, "addr": addr, "loc": loc(1), "stmtsp": list(stmts)}
 
 
-def netlist(*modules):
-    return {"type": "NETLIST", "name": "$root", "addr": "(B)", "modulesp": list(modules)}
+def netlist(*modules, types=()):
+    return {
+        "type": "NETLIST",
+        "name": "$root",
+        "addr": "(B)",
+        "modulesp": list(modules),
+        "miscsp": [{"type": "TYPETABLE", "addr": "(C)", "typesp": [*TYPES, *types]}],
+    }
 
 
 def find_node(tree, kind, name):

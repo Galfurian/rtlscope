@@ -53,13 +53,13 @@ class CombinationalFixtureTests(unittest.TestCase):
         for name in ("mux_procedural", "mux_continuous"):
             with self.subTest(module=name):
                 self.assertEqual(self.design.modules[name].instances, {})
-                self.assertEqual(self.design.modules[name].nets, [])
+                self.assertEqual(self.design.modules[name].nets, {})
 
     def test_top_nets_exclude_block_locals(self):
         # The loop variable "i" is declared inside the initial block.
         top = self.design.top
         self.assertEqual(top.ports, {})
-        self.assertEqual(top.nets, ["sel", "a", "b", "y_proc", "y_cont"])
+        self.assertEqual(list(top.nets), ["sel", "a", "b", "y_proc", "y_cont"])
 
     def test_expected_connectivity(self):
         top = self.design.top

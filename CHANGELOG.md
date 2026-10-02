@@ -12,6 +12,9 @@ in the terminal. There is no interactive UI yet.
   ports and nets, instances, and pin connections.
 - Resolve `CELL.modp`, `PIN.modVarp` and `VARREF.varp` as pointers, so neither
   stale module names nor positional pin names can misplace a connection.
+- Read each port's and net's declared packed range, following typedefs and
+  enums, and show it on box ports, edge labels and in the text dump, for
+  example `d[7:0]`.
 - Keep pin expressions other than a plain net reference as explicitly
   unsupported, with their kind and source line.
 - Reject generate blocks, instance arrays, interface instances, unresolved

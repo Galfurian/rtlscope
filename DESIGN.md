@@ -56,12 +56,21 @@ Design
 Module
   name
   ports: name -> Port              declaration order
-  nets: [name]                     module-level signals that are not ports
+  nets: name -> Net                module-level signals that are not ports
   instances: name -> Instance      source order
 
 Port
   name
   direction: input | output | inout
+  bits: Bits | None                declared packed range; None for one bit
+
+Net
+  name
+  bits: Bits | None
+
+Bits
+  msb, lsb                         as declared, so [0:7] stays [0:7]
+  width
 
 Instance
   name
@@ -71,10 +80,11 @@ Instance
 Expr = NetRef(net) | Unsupported(kind, line)
 ```
 
-`NetRef.net` names a port or a net of the instance's parent module. A net is
-not a separate object: everything a schematic needs to know about it is which
-pins refer to it, which the renderers collect from `connections`. A `Net`
-class would earn its place once nets carry their own data, such as a width.
+`NetRef.net` names a port or a net of the instance's parent module. A `Net`
+holds what belongs to the signal itself, its name and width, and nothing
+about what it connects: which pins drive or read it is derived from the
+instances' `connections` whenever a renderer needs it. Keeping that in one
+place means it cannot disagree with itself.
 
 An instance does not repeat its module's ports. A renderer draws every port of
 `design.modules[inst.module]`, so an omitted pin and a pin connected to
@@ -120,7 +130,11 @@ to a module declared after its parent.
 1. **Signals.** Each `VAR` directly in a module's `stmtsp` is a port when its
    `direction` is `INPUT`, `OUTPUT` or `INOUT`, and a net when it is `NONE`.
    Parameters (`varType` `GPARAM`, `LPARAM`, `GENVAR`) are neither. Any other
-   direction, such as `REF`, is an error. Variables declared inside blocks,
+   direction, such as `REF`, is an error. The width comes from `VAR.dtypep`:
+   a `BASICDTYPE` has a `range` such as `"7:0"`, or none for a single bit,
+   and a typedef (`REFDTYPE`) or an enum (`ENUMDTYPE`) is followed through
+   `refDTypep` to the type it is built on. Other types, such as
+   multi-dimensional packed arrays and structs, are errors for now. Variables declared inside blocks,
    like a loop index in an `initial`, are not module-level and are ignored.
 2. **Instances.** Each `CELL` directly in `stmtsp` becomes an `Instance`:
    - `CELL.modp` points at the instantiated `MODULE`. Its `name` is used, not
