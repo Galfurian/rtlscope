@@ -15,6 +15,8 @@ in the terminal. There is no interactive UI yet.
 - Read each port's and net's declared packed range, following typedefs and
   enums, and show it on box ports, edge labels and in the text dump, for
   example `d[7:0]`.
+- Show parameterized modules by their source name and elaborated parameter
+  values, `bit_reverse #(WIDTH=4)`, instead of Verilator's `bit_reverse__W4`.
 - Keep pin expressions other than a plain net reference as explicitly
   unsupported, with their kind and source line.
 - Reject generate blocks, instance arrays, interface instances, unresolved
@@ -24,7 +26,8 @@ in the terminal. There is no interactive UI yet.
 ### Output
 
 - Draw one module as a box-and-wire block diagram in the terminal, the default
-  output. Instances are placed in columns that follow the data flow, and
+  output. Each box is titled `instance : module`, with its parameter values
+  below. Instances are placed in columns that follow the data flow, and
   every net is routed by a maze router on the character grid. Crossings are
   `┼`, branches are `┬ ┴ ├ ┤`, and the two never look alike.
 - Edge labels are placed like unconstrained I/O pins: each goes to the row of
@@ -40,6 +43,7 @@ in the terminal. There is no interactive UI yet.
 
 ### Examples
 
-- `examples/` holds a full adder, a counter and a pipelined adder, each as
+- `examples/` holds a full adder, a counter, a pipelined adder and a module
+  instantiated at two parameter values, each as
   SystemVerilog next to the Verilator JSON generated from it. The test suite
   draws every one and checks the drawing against the model.

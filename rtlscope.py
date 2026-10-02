@@ -111,11 +111,24 @@ class Instance:
 
 @dataclass
 class Module:
+    # Unique within the design. A parameterized module elaborated with other
+    # values has a name of its own, and keeps the source name in ``source``.
     name: str
     ports: Dict[str, Port] = field(default_factory=dict)
     # Module-level signals that are not ports, in declaration order.
     nets: Dict[str, Net] = field(default_factory=dict)
     instances: Dict[str, Instance] = field(default_factory=dict)
+    source: str = ""  # the name written in the source; empty means ``name``
+    # Overridable parameters and their elaborated values, in declaration order.
+    params: Dict[str, str] = field(default_factory=dict)
+
+    @property
+    def signature(self) -> str:
+        """``bit_reverse #(WIDTH=4)``: the source name and parameter values."""
+        base = self.source or self.name
+        if not self.params:
+            return base
+        return base + " #(" + ", ".join(f"{k}={v}" for k, v in self.params.items()) + ")"
 
 
 @dataclass
@@ -215,6 +228,33 @@ def _line(node: Dict[str, Any]) -> Optional[int]:
         return None
 
 
+def _const_text(name: str) -> str:
+    """A Verilator constant such as ``32'sh4`` as a number people write: ``4``."""
+    width, quote, rest = name.partition("'")
+    if not quote or not rest:
+        return name
+    signed = rest[0] == "s"
+    rest = rest[1:] if signed else rest
+    base = {"h": 16, "d": 10, "b": 2, "o": 8}.get(rest[:1])
+    try:
+        value = int(rest[1:], base) if base else None
+        bits = int(width)
+    except ValueError:
+        return name
+    if value is None:
+        return name
+    if signed and bits and value >= 1 << (bits - 1):
+        value -= 1 << bits
+    return str(value)
+
+
+def _param_value(var: Dict[str, Any]) -> str:
+    values = var.get("valuep") or []
+    if len(values) == 1 and values[0].get("type") == "CONST":
+        return _const_text(values[0].get("name", "?"))
+    return "?"
+
+
 def _describe(node: Dict[str, Any]) -> str:
     text = f"{node.get('type', '?')} {node.get('name', '')!r}"
     line = _line(node)
@@ -268,11 +308,13 @@ class _VerilatorReader:
         raise VerilatorJSONError(f"{_describe(var)}: {kind} not supported yet")
 
     def _read_signals(self, node: Dict[str, Any]) -> Module:
-        module = Module(node["name"])
+        module = Module(node["name"], source=node.get("origName", node["name"]))
         for stmt in node.get("stmtsp", []):
             if stmt.get("type") != "VAR":
                 continue
             name = stmt["name"]
+            if stmt.get("varType") == "GPARAM":
+                module.params[name] = _param_value(stmt)
             direction = stmt.get("direction", "NONE")
             if direction in _DIRECTIONS:
                 port = Port(name, _DIRECTIONS[direction], self._bits(stmt))
@@ -364,13 +406,16 @@ def _expr_text(expr: Expr) -> str:
 
 
 def render_module_text(design: Design, module: Module) -> List[str]:
-    lines = [f"module {module.name}"]
+    header = f"module {module.name}"
+    if module.signature != module.name:
+        header += f"  ({module.signature})"
+    lines = [header]
     for port in module.ports.values():
         lines.append(f"  {port.direction.value:<6} {port.display}")
     for net in module.nets.values():
         lines.append(f"  {'net':<6} {net.display}")
     for inst in module.instances.values():
-        lines.append(f"  instance {inst.name} : {inst.module}")
+        lines.append(f"  instance {inst.name} : {design.modules[inst.module].signature}")
         ports = list(design.modules[inst.module].ports.values())
         width = max((len(p.display) for p in ports), default=0)
         for port in ports:
@@ -445,6 +490,7 @@ class Costs:
 
 @dataclass
 class _Box:
+    name: str  # the instance, or the module for a lone box
     title: str
     subtitle: str
     left: List[Port]
@@ -460,7 +506,7 @@ class _Box:
     def inner(self) -> int:
         lw = max((len(p.display) for p in self.left), default=0)
         rw = max((len(p.display) for p in self.right), default=0)
-        return max(len(self.title), len(self.subtitle), lw + rw + (2 if lw and rw else 0))
+        return max(len(self.title) + 2, len(self.subtitle) + 2, lw + rw + (2 if lw and rw else 0))
 
     @property
     def width(self) -> int:
@@ -640,12 +686,17 @@ def _topological(preds: Dict[str, List[str]], feedback: set) -> List[str]:
     return order
 
 
+def _params_text(module: Module) -> str:
+    return "#(" + ", ".join(f"{k}={v}" for k, v in module.params.items()) + ")" if module.params else ""
+
+
 def _plan(design: Design, module: Module) -> Tuple[List[List[_Box]], List[_Label], List[_Label], List[_Net]]:
     columns = [
         [
             _Box(
                 inst.name,
-                inst.module,
+                f"{inst.name} : {design.modules[inst.module].source or inst.module}",
+                _params_text(design.modules[inst.module]),
                 [p for p in design.modules[inst.module].ports.values() if p.direction is Direction.INPUT],
                 [p for p in design.modules[inst.module].ports.values() if p.direction is not Direction.INPUT],
                 slot=c + 1,
@@ -657,7 +708,7 @@ def _plan(design: Design, module: Module) -> Tuple[List[List[_Box]], List[_Label
     nets = {name: _Net(name) for name in [*module.ports, *module.nets]}
     for column in columns:
         for box in column:
-            inst = module.instances[box.title]
+            inst = module.instances[box.name]
             for port in box.left + box.right:
                 expr = inst.connections.get(port.name)
                 if isinstance(expr, NetRef):
@@ -1032,7 +1083,7 @@ def render_diagram(
     the module does not fit, or does not fit in ``height`` rows when given.
     """
     if not module.instances:
-        box = _Box(module.name, "", [p for p in module.ports.values() if p.direction is Direction.INPUT],
+        box = _Box(module.name, module.source or module.name, _params_text(module), [p for p in module.ports.values() if p.direction is Direction.INPUT],
                    [p for p in module.ports.values() if p.direction is not Direction.INPUT], slot=0)
         text: Dict[Cell, str] = {}
         box.draw(text)

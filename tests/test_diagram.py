@@ -11,21 +11,19 @@ from verilator_snippets import COMBINATIONAL
 IN, OUT, IO = Direction.INPUT, Direction.OUTPUT, Direction.INOUT
 
 COMBINATIONAL_DIAGRAM = """\
-            ┌──────────────┐
-            │    u_proc    │
-            │mux_procedural│
-sel ─────┬──┤sel          y├─────── y_proc
-a ──────┬┼──┤a             │
-b ─────┬┼┼──┤b             │
-       │││  └──────────────┘
+            ┌─────────────────────────┐
+            │ u_proc : mux_procedural │
+sel ─────┬──┤sel                     y├─────── y_proc
+a ──────┬┼──┤a                        │
+b ─────┬┼┼──┤b                        │
+       │││  └─────────────────────────┘
        │││
-       │││  ┌──────────────┐
-       │││  │    u_cont    │
-       │││  │mux_continuous│
-       ││└──┤sel          y├─────── y_cont
-       │└───┤a             │
-       └────┤b             │
-            └──────────────┘
+       │││  ┌─────────────────────────┐
+       │││  │ u_cont : mux_continuous │
+       ││└──┤sel                     y├─────── y_cont
+       │└───┤a                        │
+       └────┤b                        │
+            └─────────────────────────┘
 """
 
 
@@ -186,12 +184,12 @@ class PlacementTests(DiagramAssertions):
         self.assertEqual(
             text.splitlines(),
             [
-                "┌──────────────┐",
-                "│mux_procedural│",
-                "│sel          y│",
-                "│a             │",
-                "│b             │",
-                "└──────────────┘",
+                "┌────────────────┐",
+                "│ mux_procedural │",
+                "│sel            y│",
+                "│a               │",
+                "│b               │",
+                "└────────────────┘",
             ],
         )
 
@@ -245,11 +243,11 @@ class SizeConstraintTests(unittest.TestCase):
         self.assertLessEqual(max(map(len, text.splitlines())), width)
 
     def test_too_short(self):
-        with self.assertRaisesRegex(DiagramError, "needs 15 rows, but the height is 10"):
+        with self.assertRaisesRegex(DiagramError, "needs 13 rows, but the height is 10"):
             rtlscope.render_diagram(self.design, self.design.top, 80, height=10)
 
     def test_height_that_fits(self):
-        text = rtlscope.render_diagram(self.design, self.design.top, 80, height=15)
+        text = rtlscope.render_diagram(self.design, self.design.top, 80, height=13)
         self.assertEqual(text, COMBINATIONAL_DIAGRAM)
 
 

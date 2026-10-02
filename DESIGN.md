@@ -54,7 +54,10 @@ Design
   top                              the only top, or an error naming them all
 
 Module
-  name
+  name                             unique: Verilator's "bit_reverse__W4"
+  source                           the name in the source: "bit_reverse"
+  params: name -> value            overridable parameters, as elaborated
+  signature                        "bit_reverse #(WIDTH=4)"
   ports: name -> Port              declaration order
   nets: name -> Net                module-level signals that are not ports
   instances: name -> Instance      source order
@@ -134,7 +137,14 @@ to a module declared after its parent.
    a `BASICDTYPE` has a `range` such as `"7:0"`, or none for a single bit,
    and a typedef (`REFDTYPE`) or an enum (`ENUMDTYPE`) is followed through
    `refDTypep` to the type it is built on. Other types, such as
-   multi-dimensional packed arrays and structs, are errors for now. Variables declared inside blocks,
+   multi-dimensional packed arrays and structs, are errors for now.
+
+   A module elaborated with non-default parameters is a `MODULE` of its own
+   with a mangled `name` such as `bit_reverse__W4`; its `origName` is the
+   source name. Each `VAR` with `varType` `GPARAM` is an overridable
+   parameter, whose `valuep` holds the elaborated `CONST`, written by
+   Verilator as `32'sh4` and shown as `4`. Local parameters (`LPARAM`) are
+   not shown: nobody chose their value at the instantiation. Variables declared inside blocks,
    like a loop index in an `initial`, are not module-level and are ignored.
 2. **Instances.** Each `CELL` directly in `stmtsp` becomes an `Instance`:
    - `CELL.modp` points at the instantiated `MODULE`. Its `name` is used, not
@@ -207,8 +217,12 @@ the modules it instantiates. It is a debugging and test aid, not the final UI.
 `render_diagram` draws one module on a character grid. It works like a very
 small physical design flow, in four steps: plan, place, route, check.
 
-**Plan.** Every instance becomes a box: instance and module name on top,
-input ports on the left edge, outputs and inouts on the right. Every net
+**Plan.** Every instance becomes a box titled `u4 : bit_reverse`, the same
+convention as the text dump, with its parameter values on a second line,
+`#(WIDTH=4)`. Parameters are shown for every specialization, defaults
+included, so two instances of one module visibly differ only in them.
+Verilator's mangled names never appear in a diagram. Input ports go on the
+left edge, outputs and inouts on the right. Every net
 becomes a list of ends: the box pins on it, plus labels at the edges of the
 diagram where the net leaves what is drawn:
 

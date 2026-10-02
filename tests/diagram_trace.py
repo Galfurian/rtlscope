@@ -51,7 +51,8 @@ class Diagram:
                     x2 += 1
                 if self.char(x2, y) != "┐" or self.char(x, y + 1) != "│" or self.char(x2, y + 1) != "│":
                     continue
-                title = self.rows[y + 1][x + 1 : x2].strip()
+                # "u_proc : mux_procedural": the instance name comes first.
+                title = self.rows[y + 1][x + 1 : x2].strip().split(" : ")[0]
                 if not title:
                     continue
                 y2 = y + 1

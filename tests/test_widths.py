@@ -97,7 +97,7 @@ class ExampleWidthTests(unittest.TestCase):
         self.assertIn("▶ count[3:0]", text)
         box = Diagram(text).box("u_inc")
         self.assertIn(("u_inc", "a"), box["pins"].values())
-        self.assertIn("a[3:0]  y[3:0]", text)
+        self.assertRegex(text, r"┤a\[3:0\] +y\[3:0\]├")
 
 
 if __name__ == "__main__":

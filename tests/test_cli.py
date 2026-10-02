@@ -44,12 +44,12 @@ class CLITests(unittest.TestCase):
     def test_diagram_of_child_module(self):
         code, out, err = run_main(COMBINATIONAL, "--module", "mux_continuous", "--width", "80")
         self.assertEqual((code, err), (0, ""))
-        self.assertEqual(out.splitlines()[1], "│mux_continuous│")
+        self.assertEqual(out.splitlines()[1], "│ mux_continuous │")
 
     def test_diagram_too_narrow_or_short(self):
         for args, message in (
             (("--width", "20"), "needs at least"),
-            (("--width", "80", "--height", "5"), "needs 15 rows, but the height is 5"),
+            (("--width", "80", "--height", "5"), "needs 13 rows, but the height is 5"),
         ):
             with self.subTest(args=args):
                 code, out, err = run_main(COMBINATIONAL, *args)

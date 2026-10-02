@@ -60,27 +60,26 @@ testbench that instantiates two 2:1 multiplexers, one written with
 
 ```text
 $ python3 rtlscope.py tests/fixtures/Vtb_combinational.tree.json
-            ┌──────────────┐
-            │    u_proc    │
-            │mux_procedural│
-sel ─────┬──┤sel          y├─────── y_proc
-a ──────┬┼──┤a             │
-b ─────┬┼┼──┤b             │
-       │││  └──────────────┘
+            ┌─────────────────────────┐
+            │ u_proc : mux_procedural │
+sel ─────┬──┤sel                     y├─────── y_proc
+a ──────┬┼──┤a                        │
+b ─────┬┼┼──┤b                        │
+       │││  └─────────────────────────┘
        │││
-       │││  ┌──────────────┐
-       │││  │    u_cont    │
-       │││  │mux_continuous│
-       ││└──┤sel          y├─────── y_cont
-       │└───┤a             │
-       └────┤b             │
-            └──────────────┘
+       │││  ┌─────────────────────────┐
+       │││  │ u_cont : mux_continuous │
+       ││└──┤sel                     y├─────── y_cont
+       │└───┤a                        │
+       └────┤b                        │
+            └─────────────────────────┘
 ```
 
 Reading the diagram:
 
 ```text
-┌────┐               an instance: instance name, then module name
+│ u4 : rev │         an instance, then the module it instantiates,
+│ #(W=4)   │         with the parameter values it was elaborated with
 ┤a  y├               inputs on the left edge; outputs and inouts on the right
 d[7:0]               a bus, with its declared range
 sel ──   ── y_proc   a net driven, or read, by logic that is not drawn
@@ -105,6 +104,7 @@ generated from it, so they can be viewed without Verilator:
 python3 rtlscope.py examples/Vfull_adder.tree.json   # two half adders and an OR gate
 python3 rtlscope.py examples/Vcounter.tree.json      # a register fed back through an incrementer
 python3 rtlscope.py examples/Vpipeline.tree.json     # a two-stage pipelined adder
+python3 rtlscope.py examples/Vparameters.tree.json   # one module at two parameter values
 ```
 
 Regenerating them needs Verilator 5.022 or newer, for `--json-only`; the
