@@ -16,11 +16,11 @@ WIRES = {
     "├": N | E | S, "┤": N | S | W, "┬": E | S | W, "┴": N | E | W,
 }
 NAME = re.compile(r"[^\s▶◆]+")
-BITS = re.compile(r"\[-?\d+:-?\d+\]$")
+BITS = re.compile(r"(\[-?\d+:-?\d+\])+$")
 
 
 def bare(name):
-    """A port or net name without clock marker or range: "▷d[7:0]" is "d"."""
+    """A name without clock marker or dimensions: "▷mem[0:3][7:0]" is "mem"."""
     return BITS.sub("", name.lstrip("▷"))
 
 

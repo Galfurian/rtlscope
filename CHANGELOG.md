@@ -13,8 +13,8 @@ in the terminal. There is no interactive UI yet.
 - Resolve `CELL.modp`, `PIN.modVarp` and `VARREF.varp` as pointers, so neither
   stale module names nor positional pin names can misplace a connection.
 - Read each port's and net's declared packed range, following typedefs and
-  enums, and show it on box ports, edge labels and in the text dump, for
-  example `d[7:0]`.
+  enums, and its unpacked dimensions for memories, and show them on box
+  ports, edge labels and in the text dump: `d[7:0]`, `mem[0:3][7:0]`.
 - Show parameterized modules by their source name and elaborated parameter
   values, `bit_reverse #(WIDTH=4)`, instead of Verilator's `bit_reverse__W4`.
 - Read every process of a module (`always_ff`, `always_comb`, `always_latch`,
@@ -52,8 +52,8 @@ in the terminal. There is no interactive UI yet.
 
 ### Examples
 
-- `examples/` holds a full adder, a counter, a pipelined adder, a module
-  instantiated at two parameter values, a shift register with an
-  asynchronous reset and a flat timer module, each as
-  SystemVerilog next to the Verilator JSON generated from it. The test suite
-  draws every one and checks the drawing against the model.
+- `examples/` holds 29 small designs, each as SystemVerilog next to the
+  Verilator JSON generated from it: hierarchy, parameters, flat modules,
+  state machines, memories, clocking styles, latches, tristates, connection
+  styles, pin expressions and a testbench. The test suite draws every module
+  of every one and checks the drawing against the model.

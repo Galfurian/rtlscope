@@ -68,9 +68,12 @@ Port
   direction: input | output | inout
   bits: Bits | None                declared packed range; None for one bit
 
+  array: (Bits, ...)               unpacked dimensions, outermost first
+
 Net
   name
   bits: Bits | None
+  array: (Bits, ...)
 
 Bits
   msb, lsb                         as declared, so [0:7] stays [0:7]
@@ -146,8 +149,11 @@ to a module declared after its parent.
    The width comes from `VAR.dtypep`:
    a `BASICDTYPE` has a `range` such as `"7:0"`, or none for a single bit,
    and a typedef (`REFDTYPE`) or an enum (`ENUMDTYPE`) is followed through
-   `refDTypep` to the type it is built on. Other types, such as
-   multi-dimensional packed arrays and structs, are errors for now.
+   `refDTypep` to the type it is built on. A memory is an `UNPACKARRAYDTYPE`
+   whose `declRange` (`"[0:3]"`) is an unpacked dimension above the element
+   type; it is shown in the order an expression indexes it, `mem[0:3][7:0]`.
+   Other types, such as multi-dimensional packed arrays and structs, are
+   errors for now.
 
    A module elaborated with non-default parameters is a `MODULE` of its own
    with a mangled `name` such as `bit_reverse__W4`; its `origName` is the

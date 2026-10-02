@@ -102,3 +102,17 @@ class ExampleWidthTests(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ArrayTests(unittest.TestCase):
+    def test_unpacked_dimensions_outermost_first(self):
+        tree = buffer_design()
+        tree["miscsp"][0]["typesp"] += [
+            {"type": "UNPACKARRAYDTYPE", "addr": "(U1)", "declRange": "[0:3]", "refDTypep": "(U2)"},
+            {"type": "UNPACKARRAYDTYPE", "addr": "(U2)", "declRange": "[1:0]", "refDTypep": LOGIC8},
+        ]
+        find_node(tree, "VAR", "x")["dtypep"] = "(U1)"
+        net = rtlscope.parse_verilator_tree(tree).top.nets["x"]
+        self.assertEqual(net.array, (Bits(0, 3), Bits(1, 0)))
+        self.assertEqual(net.bits, Bits(7, 0))
+        self.assertEqual(net.display, "x[0:3][1:0][7:0]")

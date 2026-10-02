@@ -12,14 +12,16 @@ EXAMPLES = Path(__file__).resolve().parent.parent / "examples"
 
 
 class ExampleTests(DiagramAssertions):
-    def test_every_example_is_drawn_as_modeled(self):
+    def test_every_module_of_every_example_is_drawn_as_modeled(self):
         trees = sorted(EXAMPLES.glob("*.tree.json"))
-        self.assertTrue(trees)
+        self.assertGreaterEqual(len(trees), 20)
         for tree in trees:
-            with self.subTest(example=tree.name):
-                design = rtlscope.load_verilator_json(tree)
-                text = rtlscope.render_diagram(design, design.top, 120)
-                self.assertDrawnAsModeled(design, design.top, text)
+            design = rtlscope.load_verilator_json(tree)
+            for module in design.modules.values():
+                with self.subTest(example=tree.name, module=module.name):
+                    text = rtlscope.render_diagram(design, module, 250)
+                    self.assertDrawnAsModeled(design, module, text)
+                    self.assertTrue(rtlscope.render_text(design, module.name).startswith("module "))
 
     def test_every_source_has_its_tree(self):
         for source in sorted(EXAMPLES.glob("*.sv")):

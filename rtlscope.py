@@ -55,16 +55,22 @@ class Bits:
         return f"[{self.msb}:{self.lsb}]"
 
 
+def _signal_text(name: str, array: Tuple[Bits, ...], bits: Optional[Bits]) -> str:
+    """``mem[0:3][7:0]``: dimensions in the order an expression indexes them."""
+    return name + "".join(map(str, array)) + (str(bits) if bits else "")
+
+
 @dataclass(frozen=True)
 class Port:
     name: str
     direction: Direction
     bits: Optional[Bits] = None  # None for a single bit
     clock: bool = False  # an edge that clocks the module, or its children
+    array: Tuple[Bits, ...] = ()  # unpacked dimensions, outermost first
 
     @property
     def display(self) -> str:
-        return self.name + (str(self.bits) if self.bits else "")
+        return _signal_text(self.name, self.array, self.bits)
 
 
 @dataclass(frozen=True)
@@ -73,10 +79,11 @@ class Net:
 
     name: str
     bits: Optional[Bits] = None  # None for a single bit
+    array: Tuple[Bits, ...] = ()  # unpacked dimensions, outermost first
 
     @property
     def display(self) -> str:
-        return self.name + (str(self.bits) if self.bits else "")
+        return _signal_text(self.name, self.array, self.bits)
 
 
 @dataclass(frozen=True)
@@ -393,24 +400,30 @@ class _VerilatorReader:
             raise VerilatorJSONError(f"{_describe(node)}: unresolved {key} ({addr})")
         return target
 
-    def _bits(self, var: Dict[str, Any]) -> Optional[Bits]:
-        """The packed range of a variable, following typedef references."""
+    def _shape(self, var: Dict[str, Any]) -> Tuple[Tuple[Bits, ...], Optional[Bits]]:
+        """A variable's unpacked dimensions and packed range, through typedefs."""
+        array: List[Bits] = []
         dtype = self._resolve(var, "dtypep")
-        for _ in range(16):
-            if dtype.get("type") == "BASICDTYPE":
-                if "range" not in dtype:
-                    return None
-                msb, _, lsb = dtype["range"].partition(":")
-                try:
-                    return Bits(int(msb), int(lsb))
-                except ValueError:
-                    raise VerilatorJSONError(f"{_describe(var)}: unreadable range {dtype['range']!r}") from None
+        for _ in range(64):
+            kind = dtype.get("type")
+            if kind == "BASICDTYPE":
+                return tuple(array), self._range(var, dtype["range"]) if "range" in dtype else None
+            if kind == "UNPACKARRAYDTYPE":
+                array.append(self._range(var, dtype.get("declRange", "").strip("[]")))
             # A typedef and an enum are as wide as the type they refer to.
-            if dtype.get("type") not in ("REFDTYPE", "ENUMDTYPE"):
+            elif kind not in ("REFDTYPE", "ENUMDTYPE"):
                 break
             dtype = self._resolve(dtype, "refDTypep")
         kind = {"PACKARRAYDTYPE": "multi-dimensional packed arrays"}.get(dtype.get("type"), f"data type {dtype.get('type')}")
         raise VerilatorJSONError(f"{_describe(var)}: {kind} not supported yet")
+
+    @staticmethod
+    def _range(var: Dict[str, Any], text: str) -> Bits:
+        msb, _, lsb = text.partition(":")
+        try:
+            return Bits(int(msb), int(lsb))
+        except ValueError:
+            raise VerilatorJSONError(f"{_describe(var)}: unreadable range {text!r}") from None
 
     def _read_signals(self, node: Dict[str, Any]) -> Module:
         module = Module(node["name"], source=node.get("origName", node["name"]))
@@ -422,7 +435,8 @@ class _VerilatorReader:
                 module.params[name] = _param_value(stmt)
             direction = stmt.get("direction", "NONE")
             if direction in _DIRECTIONS:
-                port = Port(name, _DIRECTIONS[direction], self._bits(stmt))
+                array, bits = self._shape(stmt)
+                port = Port(name, _DIRECTIONS[direction], bits, array=array)
                 module.ports[name] = port
                 self.ports[stmt["addr"]] = port
             elif direction != "NONE":
@@ -430,7 +444,8 @@ class _VerilatorReader:
             elif stmt.get("varType") in _NON_NET_VAR_TYPES:
                 continue
             else:
-                module.nets[name] = Net(name, self._bits(stmt))
+                array, bits = self._shape(stmt)
+                module.nets[name] = Net(name, bits, array)
             self.signals[stmt["addr"]] = (module.name, name)
         return module
 
@@ -746,7 +761,7 @@ def _cells(design: Design, module: Module) -> List[_Cell]:
 
 
 def _as_port(signal: Union[Port, Net], direction: Direction) -> Port:
-    return Port(signal.name, direction, signal.bits)
+    return Port(signal.name, direction, signal.bits, array=signal.array)
 
 
 def _columns(cells: List[_Cell]) -> List[List[_Cell]]:

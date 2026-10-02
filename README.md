@@ -126,13 +126,27 @@ unsupported pin is connected to, for example `input  sel <- ? SEL (line 37)`.
 generated from it, so they can be viewed without Verilator:
 
 ```bash
-python3 rtlscope.py examples/Vfull_adder.tree.json   # two half adders and an OR gate
-python3 rtlscope.py examples/Vcounter.tree.json      # a register fed back through an incrementer
-python3 rtlscope.py examples/Vpipeline.tree.json     # a two-stage pipelined adder
-python3 rtlscope.py examples/Vparameters.tree.json   # one module at two parameter values
-python3 rtlscope.py examples/Vshift_register.tree.json  # flip-flops with an asynchronous reset
-python3 rtlscope.py examples/Vtimer.tree.json        # a flat module: a register and combinational logic
+python3 rtlscope.py examples/Vtimer.tree.json
+python3 rtlscope.py examples/Vhierarchy.tree.json --module core
 ```
+
+| Example | What it exercises |
+|---|---|
+| `full_adder`, `hierarchy`, `parameter_chain` | instances, three levels of hierarchy, parameters passed down |
+| `counter`, `pipeline`, `seven_segment` | registers and logic split into modules |
+| `parameters` | one module at two parameter values |
+| `timer`, `alu`, `pwm`, `edge_detector`, `lfsr`, `uart_tx`, `debouncer`, `priority_encoder` | flat modules: processes only |
+| `traffic_light` | a state machine with an enum state |
+| `register_file`, `fifo` | memories (unpacked arrays) |
+| `shift_register`, `negedge_flop`, `two_clock_sync`, `clock_divider` | clocks: asynchronous reset, both edges, two domains, a derived clock |
+| `latch` | `always_latch`, whose enable is not a clock |
+| `tristate` | `inout` ports |
+| `connection_styles` | named, positional, `.name` and unconnected pins |
+| `pin_expressions`, `ripple_carry_adder` | slices, concatenations and constants on pins, still shown as `?` |
+| `gray_code` | two instances wired in series |
+| `testbench` | a clock generator and a stimulus block around a design |
+
+Some are wider than a terminal: `uart_tx` needs about 180 columns.
 
 Regenerating them needs Verilator 5.022 or newer, for `--json-only`; the
 committed files come from Verilator 5.052:
